@@ -6,6 +6,8 @@
 #include "IFeature_Dx12.h"
 #include "State.h"
 
+#include <nr/NeuralRendering.h>
+
 void IFeature_Dx12::ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
                                     D3D12_RESOURCE_STATES InBeforeState, D3D12_RESOURCE_STATES InAfterState) const
 {
@@ -97,6 +99,21 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
 
     // Order is important as that's the order of shader dispatch
     std::vector<ShaderPass> pipeline;
+
+    // Neural rendering after the upscaler: the first stage, reading exactly
+    // what the upscaler wrote. Before the upscaler it replaces the colour
+    // input instead (below).
+    if (NeuralRendering::Enabled() && !NeuralRendering::PreUpscale() && NeuralRendering::RuntimePresent())
+    {
+        pipeline.push_back(
+            { // Setup
+              [&](ID3D12Resource* nextOutput) -> ID3D12Resource*
+              { return NeuralRendering::AfterUpscaleBuffer(Device, nextOutput); },
+
+              // Dispatch
+              [&](ID3D12Resource* input, ID3D12Resource* output) -> bool
+              { return NeuralRendering::AfterUpscale(Device, InCommandList, InParameters, this, input, output); } });
+    }
 
     if (useOutputScaling)
     {
@@ -239,11 +256,30 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     // Upscaler will write to the first active shader, or just output
     InParameters->Set(NVSDK_NGX_Parameter_Output, currentTarget);
 
+    // Neural rendering before the upscaler: the upscaler reads the enhanced
+    // colour for this call only; the game's own is put back right after.
+    ID3D12Resource* nrGameColor = nullptr;
+    if (NeuralRendering::Enabled() && NeuralRendering::PreUpscale() && NeuralRendering::RuntimePresent())
+    {
+        if (InParameters->Get(NVSDK_NGX_Parameter_Color, &nrGameColor) != NVSDK_NGX_Result_Success)
+            InParameters->Get(NVSDK_NGX_Parameter_Color, (void**) &nrGameColor);
+
+        auto enhanced = NeuralRendering::BeforeUpscale(Device, InCommandList, InParameters, this);
+
+        if (enhanced != nullptr)
+            InParameters->Set(NVSDK_NGX_Parameter_Color, enhanced);
+        else
+            nrGameColor = nullptr;
+    }
+
     UpscalerTime->Start(InCommandList);
 
     auto evalResult = EvaluateInternal(InCommandList, InParameters);
 
     UpscalerTime->End(InCommandList);
+
+    if (nrGameColor != nullptr)
+        InParameters->Set(NVSDK_NGX_Parameter_Color, nrGameColor);
 
     if (!evalResult)
         return false;

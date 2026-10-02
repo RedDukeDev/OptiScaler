@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "menu_common.h"
+#include <nr/NeuralRendering.h>
 
 #include "input/input_system.h"
 
@@ -2782,6 +2783,10 @@ void MenuCommon::RenderUpscalerStateMessage(RenderMenuContext& ctx)
         else
             ImGui::SetWindowFontScale(menuResScale);
     }
+    // Neural rendering also runs on the finished image, with no upscaler at all.
+    if ((currentFeature == nullptr || !currentFeature->IsInited() || currentFeature->IsFrozen()) &&
+        state.swapchainApi == DX12)
+        RenderNeuralRenderingSettings(ctx, false);
 }
 
 static const char* ApiName(API api);
@@ -5726,6 +5731,246 @@ void MenuCommon::RenderLowLatencySettings(RenderMenuContext& ctx)
     PopulateCombo("Force State", config->FN_ForceReflex, lowlatency_states);
 }
 
+void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool withUpscaler)
+{
+    auto config = ctx.config;
+
+    ImGui::SeparatorText("Neural Rendering (DLSS 5)");
+
+    if (!NeuralRendering::RuntimePresent())
+    {
+        // Wrapped: the path is the whole point of the message, and a
+        // game's folder is usually wider than the menu.
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGui::TextWrapped("dlss5nr runtime not found: expected %s",
+                           wstring_to_string(
+                               (NeuralRendering::RuntimeDirectory() / L"dlss5nr_runtime.dll").wstring())
+                               .c_str());
+        ImGui::PopStyleColor();
+    }
+    else
+    {
+        bool changed = false;
+
+        if (bool enabled = config->NrEnabled.value_or_default(); ImGui::Checkbox("Enable##nr", &enabled))
+        {
+            config->NrEnabled = enabled;
+            changed = true;
+        }
+
+        ShowHelpMarker("DLSS 5 Neural Rendering, running on this GPU through\n"
+                       "the dlss5nr runtime. The network runs beside the game\n"
+                       "and its result is carried along the motion vectors,\n"
+                       "so a slow network lowers how often the image is\n"
+                       "enhanced, not the frame rate");
+
+        if (withUpscaler)
+        {
+            ImGui::SameLine(0.0f, 16.0f);
+
+            if (bool pre = config->NrPreUpscale.value_or_default(); ImGui::Checkbox("Before the upscaler", &pre))
+            {
+                config->NrPreUpscale = pre;
+                changed = true;
+            }
+
+            ShowHelpMarker("Run the network on the upscaler's input, at render\n"
+                           "resolution: much cheaper, and what moving objects\n"
+                           "uncover shows far less; somewhat lower quality");
+        }
+
+        // With no upscaler the network runs on the finished image. There are no
+        // motion vectors then: its result trails behind whatever moves unless
+        // Wait for the network is on, and the game's own interface is enhanced
+        // along with the scene.
+        if (!withUpscaler)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            ImGui::TextWrapped("No upscaler in use: the network runs on the finished image, without motion "
+                               "vectors, so its result trails behind what moves unless it is waited for");
+            ImGui::PopStyleColor();
+        }
+
+        if (bool wait = config->NrWaitForNetwork.value_or_default();
+            ImGui::Checkbox("Wait for the network", &wait))
+        {
+            config->NrWaitForNetwork = wait;
+            changed = true;
+        }
+
+        ShowHelpMarker("The game waits for the network on every frame: no\n"
+                       "trails behind moving objects, but the frame rate\n"
+                       "becomes the network's. Best with a low network\n"
+                       "resolution, or before the upscaler");
+
+        dlss5nr_status status {};
+        NeuralRendering::GetStatus(status);
+
+        static const char* stateNames[] = { "starting", "running", "failed" };
+        const char* stateName = status.state >= 0 && status.state < 3 ? stateNames[status.state] : "?";
+
+        if (status.state == DLSS5NR_STATE_RUNNING)
+            ImGui::TextWrapped("Network %ux%u, %.1f ms, %.1f per second, %u native kernels; result "
+                               "captured %u frames before it arrived, %u frames old",
+                               status.network_width, status.network_height, status.evaluation_ms,
+                               status.evaluations_per_second, status.native_kernels,
+                               status.result_latency, status.result_age);
+        else if (config->NrEnabled.value_or_default())
+            ImGui::TextDisabled("Runtime %s: %s", stateName, status.message);
+
+        ImGui::BeginDisabled(!config->NrEnabled.value_or_default());
+
+        if (!withUpscaler || !config->NrPreUpscale.value_or_default())
+        {
+            if (float scale = config->NrResolutionScale.value_or_default();
+                ImGui::SliderFloat("Network resolution", &scale, 0.25f, 1.0f, "%.2f"))
+            {
+                config->NrResolutionScale = scale;
+                changed = true;
+            }
+
+            ShowHelpMarker("The network's resolution as a fraction of the output.\n"
+                           "Its cost follows its pixels");
+        }
+
+        const char* styles[] = { "Default", "Natural", "Cinematic" };
+        if (int style = config->NrStyle.value_or_default(); ImGui::Combo("Style##nr", &style, styles, 3))
+        {
+            config->NrStyle = style;
+            changed = true;
+        }
+
+        auto slider = [&](const char* label, CustomOptional<float>& setting, float low, float high)
+        {
+            if (float value = setting.value_or_default(); ImGui::SliderFloat(label, &value, low, high, "%.2f"))
+            {
+                setting = value;
+                changed = true;
+            }
+        };
+
+        slider("Intensity##nr", config->NrIntensity, 0.0f, 1.0f);
+        slider("Local tone##nr", config->NrLocalTone, 0.0f, 1.0f);
+        slider("Local structure##nr", config->NrLocalStructure, 0.0f, 1.0f);
+        // Negative is the network's "automatic": skin follows the structure strength.
+        {
+            const float skin = config->NrSkinStructure.value_or_default();
+            bool automatic = skin < 0.0f;
+            if (ImGui::Checkbox("Skin structure: auto##nr", &automatic))
+            {
+                config->NrSkinStructure = automatic ? -1.0f : 1.0f;
+                changed = true;
+            }
+            ShowHelpMarker("The detail the network adds to faces and skin: pores,\n"
+                           "shading, texture. Auto follows Local structure; untick\n"
+                           "to set it yourself, where 0 leaves them as the game drew them");
+
+            if (automatic)
+                ImGui::BeginDisabled();
+            if (float value = automatic ? 1.0f : skin; ImGui::SliderFloat("Skin structure##nr", &value, 0.0f, 1.0f, "%.2f"))
+            {
+                config->NrSkinStructure = value;
+                changed = true;
+            }
+            if (automatic)
+                ImGui::EndDisabled();
+        }
+
+        if (auto ch = ScopedCollapsingHeader("Composition##nr"); ch.IsHeaderOpen())
+        {
+            slider("Detail##nr", config->NrDetailStrength, 0.0f, 2.0f);
+            ShowHelpMarker("How much of the network's light and detail is applied:\n"
+                           "0 the game's image, 1 the network's, above 1 amplified");
+
+            slider("Colour##nr", config->NrColourStrength, 0.0f, 2.0f);
+            ShowHelpMarker("0 keeps the game's hue, 1 takes the network's,\n"
+                           "above 1 its colour is pushed further");
+
+            slider("Max ratio##nr", config->NrMaxRatio, 1.0f, 8.0f);
+            ShowHelpMarker("The most a pixel may be brightened or darkened by the\n"
+                           "network: keeps a stale or odd result from flickering");
+
+            if (bool follow = config->NrFollowMotion.value_or_default();
+                ImGui::Checkbox("Follow motion##nr", &follow))
+            {
+                config->NrFollowMotion = follow;
+                changed = true;
+            }
+
+            ShowHelpMarker("The network's result arrives a few frames late: this\n"
+                           "moves it along the motion vectors to where the scene is\n"
+                           "now. Off, it trails behind moving objects");
+
+            ImGui::SameLine(0.0f, 16.0f);
+
+            if (bool history = config->NrNetworkHistory.value_or_default();
+                ImGui::Checkbox("Network history##nr", &history))
+            {
+                config->NrNetworkHistory = history;
+                changed = true;
+            }
+
+            ShowHelpMarker("Lets the network blend each result with its previous\n"
+                           "one, as it does on NVIDIA cards. Off, every result\n"
+                           "is the network's answer for that frame alone");
+
+            if (bool show = config->NrShowTracking.value_or_default();
+                ImGui::Checkbox("Show tracking##nr", &show))
+            {
+                config->NrShowTracking = show;
+                changed = true;
+            }
+
+            ShowHelpMarker("Tints what the network never saw, because it was hidden\n"
+                           "or off screen when its frame was captured. Cyan and blue:\n"
+                           "its answer was found in this result or the one before.\n"
+                           "Green: only its light was filled in from around.\n"
+                           "Red: nothing was found. Not saved");
+
+            if (int age = config->NrMaxAge.value_or_default(); ImGui::SliderInt("Max age##nr", &age, 1, 60))
+            {
+                config->NrMaxAge = age;
+                changed = true;
+            }
+
+            ShowHelpMarker("Frames a result is carried along the motion vectors\n"
+                           "before it starts to fade");
+
+            const char* encodings[] = { "Auto", "Linear (HDR)", "Display encoded" };
+            if (int encoding = config->NrEncoding.value_or_default();
+                ImGui::Combo("Input##nr", &encoding, encodings, 3))
+            {
+                config->NrEncoding = encoding;
+                changed = true;
+            }
+
+            ShowHelpMarker("How the game's colour relates to the finished image\n"
+                           "the network expects. Auto follows the game's HDR flag");
+
+            const char* exposures[] = { "Auto", "Game", "Fixed" };
+            if (int mode = config->NrExposureMode.value_or_default();
+                ImGui::Combo("Exposure##nr", &mode, exposures, 3))
+            {
+                config->NrExposureMode = mode;
+                changed = true;
+            }
+
+            if (float exposure = config->NrExposure.value_or_default();
+                ImGui::SliderFloat("Exposure scale##nr", &exposure, 0.05f, 20.0f, "%.2f",
+                                   ImGuiSliderFlags_Logarithmic))
+            {
+                config->NrExposure = exposure;
+                changed = true;
+            }
+        }
+
+        ImGui::EndDisabled();
+
+        if (changed)
+            NeuralRendering::ApplySettings();
+    }
+}
+
 void MenuCommon::RenderActiveImageSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -7977,6 +8222,11 @@ const MenuCommon::MenuBox* MenuCommon::GetMenuBoxes(size_t& count)
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderUpscaleRatioSettings); } },
         { "output_scaling", "Upscaling", "Output Scaling",
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderOutputScalingSettings); } },
+        { "neural_rendering", "Upscaling", "Neural Rendering (DLSS 5)",
+          [](RenderMenuContext& c) {
+              if (IsUpscalerActive(c.currentFeature) && c.currentFeature->Api() == API::DX12)
+                  RenderCard(c, [](RenderMenuContext& x) { RenderNeuralRenderingSettings(x, true); });
+          } },
         { "shader_times", "Upscaling", "Per shader GPU times",
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderShaderTimes); } },
         { "magnifier", "Upscaling", "Magnifier",

@@ -1,5 +1,7 @@
 #include "pch.h"
+
 #include "LibraryLoad_Hooks.h"
+#include <nr/NeuralRendering.h>
 
 #include <Config.h>
 #include <DllNames.h>
@@ -44,6 +46,12 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckA(std::string libName, LPCSTR lpLibFul
 
 HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibFullPath)
 {
+    // The neural rendering runtime loads the network with our own nvngx.dll
+    // and ZLUDA's nvapi64.dll, from its own thread; the stand-ins below would
+    // answer for both.
+    if (NeuralRendering::BypassLibraryHooks())
+        return nullptr;
+
     auto libNameA = wstring_to_string(libName);
 
 #ifdef LOG_LIB_OPERATIONS

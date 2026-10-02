@@ -542,6 +542,57 @@ bool Config::Reload(std::filesystem::path iniPath)
                 MagnifierStaticPosY.set_from_config(std::clamp(setting.value(), 0.0f, 100.0f));
         }
 
+        // Neural rendering
+        {
+            NrEnabled.set_from_config(readBool("NeuralRendering", "Enabled"));
+            NrPreUpscale.set_from_config(readBool("NeuralRendering", "PreUpscale"));
+
+            if (auto setting = readFloat("NeuralRendering", "ResolutionScale"); setting.has_value())
+                NrResolutionScale.set_from_config(std::clamp(setting.value(), 0.25f, 1.0f));
+
+            if (auto setting = readInt("NeuralRendering", "Style"); setting.has_value())
+                NrStyle.set_from_config(std::clamp(setting.value(), 0, 2));
+
+            if (auto setting = readFloat("NeuralRendering", "Intensity"); setting.has_value())
+                NrIntensity.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "LocalTone"); setting.has_value())
+                NrLocalTone.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "LocalStructure"); setting.has_value())
+                NrLocalStructure.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "SkinStructure"); setting.has_value())
+                NrSkinStructure.set_from_config(std::clamp(setting.value(), -1.0f, 1.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "DetailStrength"); setting.has_value())
+                NrDetailStrength.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "ColourStrength"); setting.has_value())
+                NrColourStrength.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
+
+            if (auto setting = readFloat("NeuralRendering", "MaxRatio"); setting.has_value())
+                NrMaxRatio.set_from_config(std::clamp(setting.value(), 1.0f, 8.0f));
+
+            NrFollowMotion.set_from_config(readBool("NeuralRendering", "FollowMotion"));
+            NrNetworkHistory.set_from_config(readBool("NeuralRendering", "NetworkHistory"));
+            NrWaitForNetwork.set_from_config(readBool("NeuralRendering", "WaitForNetwork"));
+
+            if (auto setting = readInt("NeuralRendering", "MaxAge"); setting.has_value())
+                NrMaxAge.set_from_config(std::clamp(setting.value(), 1, 1000));
+
+            if (auto setting = readInt("NeuralRendering", "Encoding"); setting.has_value())
+                NrEncoding.set_from_config(std::clamp(setting.value(), 0, 2));
+
+            if (auto setting = readInt("NeuralRendering", "ExposureMode"); setting.has_value())
+                NrExposureMode.set_from_config(std::clamp(setting.value(), 0, 2));
+
+            if (auto setting = readFloat("NeuralRendering", "Exposure"); setting.has_value())
+                NrExposure.set_from_config(std::clamp(setting.value(), 0.001f, 1000.0f));
+
+            NrSnippetPath.set_from_config(readWString("NeuralRendering", "SnippetPath"));
+        }
+
         // Output Scaling
         {
             OutputScalingEnabled.set_from_config(readBool("OutputScaling", "Enabled"));
@@ -1064,6 +1115,39 @@ bool Config::SaveIni()
     {
         ini.SetValue("Framerate", "FramerateLimit",
                      GetFloatValue(Instance()->FramerateLimit.value_for_config()).c_str());
+    }
+
+    // Neural rendering
+    {
+        auto config = Instance();
+        ini.SetValue("NeuralRendering", "Enabled", GetBoolValue(config->NrEnabled.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "PreUpscale", GetBoolValue(config->NrPreUpscale.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "ResolutionScale",
+                     GetFloatValue(config->NrResolutionScale.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "Style", GetIntValue(config->NrStyle.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "Intensity", GetFloatValue(config->NrIntensity.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "LocalTone", GetFloatValue(config->NrLocalTone.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "LocalStructure",
+                     GetFloatValue(config->NrLocalStructure.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "SkinStructure",
+                     GetFloatValue(config->NrSkinStructure.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "DetailStrength",
+                     GetFloatValue(config->NrDetailStrength.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "ColourStrength",
+                     GetFloatValue(config->NrColourStrength.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "MaxRatio", GetFloatValue(config->NrMaxRatio.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "FollowMotion", GetBoolValue(config->NrFollowMotion.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "NetworkHistory",
+                     GetBoolValue(config->NrNetworkHistory.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "WaitForNetwork",
+                     GetBoolValue(config->NrWaitForNetwork.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "MaxAge", GetIntValue(config->NrMaxAge.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "Encoding", GetIntValue(config->NrEncoding.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "ExposureMode",
+                     GetIntValue(config->NrExposureMode.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "Exposure", GetFloatValue(config->NrExposure.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "SnippetPath",
+                     wstring_to_string(config->NrSnippetPath.value_for_config_or(L"auto")).c_str());
     }
 
     // Output Scaling

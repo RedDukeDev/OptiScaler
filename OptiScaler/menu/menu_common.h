@@ -239,6 +239,7 @@ class MenuCommon
     static void RenderUpscaleRatioSettings(RenderMenuContext& ctx);
     static void RenderOutputScalingSettings(RenderMenuContext& ctx);
     static void RenderInitFlagsSettings(RenderMenuContext& ctx);
+    static void RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool withUpscaler);
     static void RenderMagnifierSettings(RenderMenuContext& ctx);
     static void RenderQuirksSettings(RenderMenuContext& ctx);
     static void RenderAdvancedSettings(RenderMenuContext& ctx);

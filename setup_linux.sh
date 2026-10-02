@@ -260,6 +260,28 @@ if ! mv "$OPTISCALER_FILE" "$selected_filename"; then
     exit 1
 fi
 
+# Neural rendering (dlss5nr) on Linux: the Windows half of its HIP bridge has to
+# be beside the game's executable, where Wine looks for it first. The rest of
+# what it needs stays in linux/ (see linux/README.txt).
+install_hip_bridge() {
+    local bridge="$SCRIPT_DIR/linux/amdhip64_7.dll"
+    [ -f "$bridge" ] || return 0
+
+    echo ""
+    if [ -f "$SCRIPT_DIR/amdhip64_7.dll" ] && ! cmp -s "$bridge" "$SCRIPT_DIR/amdhip64_7.dll"; then
+        echo "WARNING: amdhip64_7.dll already exists here and is not the one from the linux folder."
+        echo "Leaving it alone; neural rendering needs the one in linux/ beside the executable."
+        return 0
+    fi
+    if cp -f "$bridge" "$SCRIPT_DIR/amdhip64_7.dll"; then
+        echo "Installed amdhip64_7.dll (HIP bridge for neural rendering)."
+    else
+        echo "WARNING: could not copy linux/amdhip64_7.dll beside the executable."
+    fi
+}
+
+install_hip_bridge
+
 # Create uninstaller
 create_uninstaller() {
     cat > "remove_optiscaler.sh" << 'EOF'
@@ -317,6 +339,24 @@ if [ "$remove_choice" = "y" ] || [ "$remove_choice" = "Y" ]; then
     rm -rf D3D12_Optiscaler
     rm -rf DlssOverrides
     rm -rf Licenses
+
+    # Neural rendering (dlss5nr) lives in the OptiScaler folder, with the
+    # rest of OptiScaler's own libraries; an older package put it beside the
+    # game's executable instead
+    rm -rf OptiScaler/dlss5nr
+    if [ -f dlss5nr/dlss5nr_runtime.dll ]; then
+        rm -rf dlss5nr
+    fi
+    rm -rf OptiScaler
+
+    # The HIP bridge setup_linux.sh copied beside the executable: only if it is
+    # still the one from the linux folder
+    if [ -f amdhip64_7.dll ] && [ -f linux/amdhip64_7.dll ] && cmp -s amdhip64_7.dll linux/amdhip64_7.dll; then
+        rm -f amdhip64_7.dll
+    fi
+    if [ -f linux/launch.sh ]; then
+        rm -rf linux
+    fi
     
     echo ""
     echo "OptiScaler removed!"
@@ -366,6 +406,12 @@ echo "Example, if using Steam, add this to launch options:"
 echo ""
 echo "WINEDLLOVERRIDES=$selected_filename=n,b %COMMAND%"
 echo ""
+if [ -f "$SCRIPT_DIR/linux/launch.sh" ]; then
+    echo "For neural rendering, run the game through the launcher instead (see linux/README.txt):"
+    echo ""
+    echo "WINEDLLOVERRIDES=$selected_filename=n,b \"$SCRIPT_DIR/linux/launch.sh\" %COMMAND%"
+    echo ""
+fi
 echo "Remember: Insert key opens OptiScaler overlay, Page Up/Down for performance stats"
 echo ""
 

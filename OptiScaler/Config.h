@@ -462,6 +462,28 @@ class Config
     CustomOptional<Upscaler, SoftDefault> Dx12Upscaler { Upscaler::XeSS };
     CustomOptional<Upscaler, SoftDefault> VulkanUpscaler { Upscaler::FSR22 };
 
+    // Neural rendering: DLSS 5 on AMD through the dlss5nr runtime (nr/NeuralRendering.h)
+    CustomOptional<bool> NrEnabled { false };
+    CustomOptional<bool> NrPreUpscale { true };
+    CustomOptional<float> NrResolutionScale { 1.0f };
+    CustomOptional<int32_t> NrStyle { 0 };
+    CustomOptional<float> NrIntensity { 1.0f };
+    CustomOptional<float> NrLocalTone { 1.0f };
+    CustomOptional<float> NrLocalStructure { 1.0f };
+    CustomOptional<float> NrSkinStructure { -1.0f };
+    CustomOptional<float> NrDetailStrength { 1.0f };
+    CustomOptional<float> NrColourStrength { 1.0f };
+    CustomOptional<float> NrMaxRatio { 2.0f };
+    CustomOptional<bool> NrFollowMotion { true };
+    CustomOptional<bool> NrNetworkHistory { false };
+    CustomOptional<bool> NrWaitForNetwork { false };
+    CustomOptional<bool> NrShowTracking { false };
+    CustomOptional<int32_t> NrMaxAge { 8 };
+    CustomOptional<int32_t> NrEncoding { 0 };
+    CustomOptional<int32_t> NrExposureMode { 0 };
+    CustomOptional<float> NrExposure { 1.0f };
+    CustomOptional<std::wstring, NoDefault> NrSnippetPath;
+
     // Output Scaling
     CustomOptional<bool> OutputScalingEnabled { false };
     CustomOptional<float> OutputScalingMultiplier { 1.5f };

@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="nr">
+      <UniqueIdentifier>{5d2c8f0e-3b1a-4c7e-9f4d-2a6b8e1c0d57}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Header Files">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
@@ -58,6 +61,12 @@
     </ClInclude>
     <ClInclude Include="upscalers\IFeature_Dx12.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="nr\NeuralRendering.h">
+      <Filter>nr</Filter>
+    </ClInclude>
+    <ClInclude Include="nr\dlss5nr.h">
+      <Filter>nr</Filter>
     </ClInclude>
     <ClInclude Include="upscalers\IFeature.h">
       <Filter>Header Files</Filter>
@@ -1057,6 +1066,9 @@
     </ClCompile>
     <ClCompile Include="upscalers\IFeature_Dx12.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="nr\NeuralRendering.cpp">
+      <Filter>nr</Filter>
     </ClCompile>
     <ClCompile Include="upscalers\xess\XeSSFeature.cpp">
       <Filter>Source Files</Filter>

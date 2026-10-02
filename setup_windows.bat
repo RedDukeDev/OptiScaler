@@ -485,6 +485,10 @@ echo     echo Deleting OptiPatcher if present
 echo     del /Q OptiScaler\plugins\*
 echo     rd OptiScaler\plugins
 echo     echo.
+echo     echo Deleting neural rendering, dlss5nr, if present
+echo     if exist OptiScaler\dlss5nr rd /S /Q OptiScaler\dlss5nr
+echo     if exist dlss5nr\dlss5nr_runtime.dll rd /S /Q dlss5nr
+echo     echo.
 echo     del /Q OptiScaler\*
 echo     rd OptiScaler
 echo     echo.

@@ -1,5 +1,7 @@
 #include "pch.h"
+
 #include "wrapped_swapchain.h"
+#include <nr/NeuralRendering.h>
 
 #include <Util.h>
 #include <Config.h>
@@ -362,6 +364,17 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
             State::Instance().currentD3D12Device = device12;
             D3D12Hooks::HookDevice(device12);
+        }
+
+        // Everything recorded for this frame has been submitted to this queue
+        // by now, so the neural rendering capture it holds can be handed on.
+        if (willPresent)
+        {
+            // With no upscaler in the game, the finished image is all there
+            // is to enhance, and this is the last moment to do it: the menu
+            // is drawn over it further down.
+            NeuralRendering::WithoutUpscaler(pSwapChain, cq);
+            NeuralRendering::Present(cq);
         }
     }
 
