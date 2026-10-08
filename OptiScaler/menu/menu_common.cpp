@@ -5918,6 +5918,18 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             ShowHelpMarker("The most a pixel may be brightened or darkened by the\n"
                            "network: keeps a stale or odd result from flickering");
 
+            if (int frames = config->NrBlendFrames.value_or_default();
+                ImGui::SliderInt("Blend frames##nr", &frames, 0, 8))
+            {
+                config->NrBlendFrames = frames;
+                changed = true;
+            }
+            ShowHelpMarker("How many frames a new result takes to replace the one\n"
+                           "before. The network decides some of its detail anew with\n"
+                           "every result, which shows as a flicker when it switches:\n"
+                           "blending over a few frames smooths that out. 0 switches\n"
+                           "at once; more than 4 or so adds little");
+
             if (bool follow = config->NrFollowMotion.value_or_default();
                 ImGui::Checkbox("Follow motion##nr", &follow))
             {

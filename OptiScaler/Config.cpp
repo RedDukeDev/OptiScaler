@@ -579,6 +579,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrWaitForNetwork.set_from_config(readBool("NeuralRendering", "WaitForNetwork"));
             NrKeepLocalTone.set_from_config(readBool("NeuralRendering", "KeepLocalTone"));
 
+            if (auto setting = readInt("NeuralRendering", "BlendFrames"); setting.has_value())
+                NrBlendFrames.set_from_config(std::clamp(setting.value(), 0, 8));
+
             if (auto setting = readInt("NeuralRendering", "Passes"); setting.has_value())
                 NrPasses.set_from_config(std::clamp(setting.value(), 1, 8));
 
@@ -1148,6 +1151,7 @@ bool Config::SaveIni()
         ini.SetValue("NeuralRendering", "Passes", GetIntValue(config->NrPasses.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "KeepLocalTone",
                      GetBoolValue(config->NrKeepLocalTone.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "BlendFrames", GetIntValue(config->NrBlendFrames.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "MaxAge", GetIntValue(config->NrMaxAge.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "Encoding", GetIntValue(config->NrEncoding.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "ExposureMode",
