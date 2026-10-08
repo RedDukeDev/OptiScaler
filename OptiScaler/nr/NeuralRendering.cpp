@@ -230,6 +230,8 @@ void NeuralRendering::PushSettings()
     settings.network_history = config->NrNetworkHistory.value_or_default() ? 1 : 0;
     settings.show_tracking = config->NrShowTracking.value_or_default() ? 1 : 0;
     settings.wait_for_network = config->NrWaitForNetwork.value_or_default() ? 1 : 0;
+    settings.passes = config->NrPasses.value_or_default();
+    settings.keep_local_tone = config->NrKeepLocalTone.value_or_default() ? 1 : 0;
     settings.max_age = config->NrMaxAge.value_or_default();
     settings.encoding = config->NrEncoding.value_or_default();
     settings.exposure_mode = config->NrExposureMode.value_or_default();

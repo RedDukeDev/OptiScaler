@@ -477,6 +477,8 @@ class Config
     CustomOptional<bool> NrFollowMotion { true };
     CustomOptional<bool> NrNetworkHistory { false };
     CustomOptional<bool> NrWaitForNetwork { false };
+    CustomOptional<int32_t> NrPasses { 1 };
+    CustomOptional<bool> NrKeepLocalTone { true };
     CustomOptional<bool> NrShowTracking { false };
     CustomOptional<int32_t> NrMaxAge { 8 };
     CustomOptional<int32_t> NrEncoding { 0 };

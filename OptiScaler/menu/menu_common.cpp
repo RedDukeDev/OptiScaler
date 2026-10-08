@@ -5878,6 +5878,32 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 ImGui::EndDisabled();
         }
 
+        if (int passes = config->NrPasses.value_or_default(); ImGui::SliderInt("Passes##nr", &passes, 1, 8))
+        {
+            config->NrPasses = passes;
+            changed = true;
+        }
+
+        ShowHelpMarker("How many times the effect is applied, one on top of the\n"
+                       "other: each pass works on the result of the one before.\n"
+                       "More passes give a stronger effect, but too many look\n"
+                       "artificial and shift the colours. Each pass takes as long\n"
+                       "as the first, so the network gets that much slower");
+
+        ImGui::BeginDisabled(config->NrPasses.value_or_default() < 2);
+
+        if (bool keep = config->NrKeepLocalTone.value_or_default(); ImGui::Checkbox("Keep local tone##nr", &keep))
+        {
+            config->NrKeepLocalTone = keep;
+            changed = true;
+        }
+
+        ShowHelpMarker("Applies Local tone on every pass. Because the passes\n"
+                       "stack, the lighting is pushed further each time: untick\n"
+                       "it to apply the local tone only on the first pass");
+
+        ImGui::EndDisabled();
+
         if (auto ch = ScopedCollapsingHeader("Composition##nr"); ch.IsHeaderOpen())
         {
             slider("Detail##nr", config->NrDetailStrength, 0.0f, 2.0f);
