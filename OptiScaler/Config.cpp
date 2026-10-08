@@ -557,19 +557,19 @@ bool Config::Reload(std::filesystem::path iniPath)
                 NrIntensity.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
 
             if (auto setting = readFloat("NeuralRendering", "LocalTone"); setting.has_value())
-                NrLocalTone.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
+                NrLocalTone.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
 
             if (auto setting = readFloat("NeuralRendering", "LocalStructure"); setting.has_value())
-                NrLocalStructure.set_from_config(std::clamp(setting.value(), 0.0f, 1.0f));
+                NrLocalStructure.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
 
             if (auto setting = readFloat("NeuralRendering", "SkinStructure"); setting.has_value())
-                NrSkinStructure.set_from_config(std::clamp(setting.value(), -1.0f, 1.0f));
+                NrSkinStructure.set_from_config(std::clamp(setting.value(), -1.0f, 2.0f));
 
             if (auto setting = readFloat("NeuralRendering", "DetailStrength"); setting.has_value())
                 NrDetailStrength.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
 
             if (auto setting = readFloat("NeuralRendering", "ColourStrength"); setting.has_value())
-                NrColourStrength.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
+                NrColourStrength.set_from_config(std::clamp(setting.value(), 0.0f, 4.0f));
 
             if (auto setting = readFloat("NeuralRendering", "MaxRatio"); setting.has_value())
                 NrMaxRatio.set_from_config(std::clamp(setting.value(), 1.0f, 8.0f));

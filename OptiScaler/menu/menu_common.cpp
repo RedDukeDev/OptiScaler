@@ -5849,9 +5849,11 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             }
         };
 
+        // The network caps Intensity at 1 whatever it is given; tone and structure
+        // go on responding up to 2, with less effect for each step.
         slider("Intensity##nr", config->NrIntensity, 0.0f, 1.0f);
-        slider("Local tone##nr", config->NrLocalTone, 0.0f, 1.0f);
-        slider("Local structure##nr", config->NrLocalStructure, 0.0f, 1.0f);
+        slider("Local tone##nr", config->NrLocalTone, 0.0f, 2.0f);
+        slider("Local structure##nr", config->NrLocalStructure, 0.0f, 2.0f);
         // Negative is the network's "automatic": skin follows the structure strength.
         {
             const float skin = config->NrSkinStructure.value_or_default();
@@ -5867,7 +5869,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
 
             if (automatic)
                 ImGui::BeginDisabled();
-            if (float value = automatic ? 1.0f : skin; ImGui::SliderFloat("Skin structure##nr", &value, 0.0f, 1.0f, "%.2f"))
+            if (float value = automatic ? 1.0f : skin; ImGui::SliderFloat("Skin structure##nr", &value, 0.0f, 2.0f, "%.2f"))
             {
                 config->NrSkinStructure = value;
                 changed = true;
@@ -5882,7 +5884,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             ShowHelpMarker("How much of the network's light and detail is applied:\n"
                            "0 the game's image, 1 the network's, above 1 amplified");
 
-            slider("Colour##nr", config->NrColourStrength, 0.0f, 2.0f);
+            slider("Colour##nr", config->NrColourStrength, 0.0f, 4.0f);
             ShowHelpMarker("0 keeps the game's hue, 1 takes the network's,\n"
                            "above 1 its colour is pushed further");
 
