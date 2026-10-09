@@ -267,6 +267,10 @@ install_hip_bridge() {
     local bridge="$SCRIPT_DIR/linux/amdhip64_7.dll"
     [ -f "$bridge" ] || return 0
 
+    # A package assembled or extracted somewhere that does not keep the
+    # executable bit leaves the launcher unable to start (Steam: exit code 126)
+    chmod +x "$SCRIPT_DIR/linux/launch.sh" 2>/dev/null
+
     echo ""
     if [ -f "$SCRIPT_DIR/amdhip64_7.dll" ] && ! cmp -s "$bridge" "$SCRIPT_DIR/amdhip64_7.dll"; then
         echo "WARNING: amdhip64_7.dll already exists here and is not the one from the linux folder."
