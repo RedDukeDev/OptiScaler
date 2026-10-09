@@ -480,6 +480,7 @@ class Config
     CustomOptional<int32_t> NrPasses { 1 };
     CustomOptional<bool> NrKeepLocalTone { true };
     CustomOptional<int32_t> NrBlendFrames { 4 };
+    CustomOptional<bool> NrWaitInside { false };
     CustomOptional<bool> NrShowTracking { false };
     CustomOptional<int32_t> NrMaxAge { 8 };
     CustomOptional<int32_t> NrEncoding { 0 };

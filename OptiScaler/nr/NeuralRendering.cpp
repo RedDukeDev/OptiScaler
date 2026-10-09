@@ -233,6 +233,7 @@ void NeuralRendering::PushSettings()
     settings.passes = config->NrPasses.value_or_default();
     settings.keep_local_tone = config->NrKeepLocalTone.value_or_default() ? 1 : 0;
     settings.blend_frames = config->NrBlendFrames.value_or_default();
+    settings.wait_inside = config->NrWaitInside.value_or_default() ? 1 : 0;
     settings.max_age = config->NrMaxAge.value_or_default();
     settings.encoding = config->NrEncoding.value_or_default();
     settings.exposure_mode = config->NrExposureMode.value_or_default();

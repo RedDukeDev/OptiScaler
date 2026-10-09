@@ -5798,10 +5798,29 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("The game waits for the network on every frame: no\n"
-                       "trails behind moving objects, but the frame rate\n"
-                       "becomes the network's. Best with a low network\n"
-                       "resolution, or before the upscaler");
+        ShowHelpMarker("The game waits for the network on every frame and its\n"
+                       "answer is applied to that very frame: no trails\n"
+                       "behind moving objects, but the frame rate becomes\n"
+                       "the network's. Best with a low network resolution,\n"
+                       "or before the upscaler. Starts once the network\n"
+                       "has answered for the first time");
+
+        ImGui::BeginDisabled(!config->NrWaitForNetwork.value_or_default());
+
+        if (bool inside = config->NrWaitInside.value_or_default(); ImGui::Checkbox("Apply on the same frame##nr", &inside))
+        {
+            config->NrWaitInside = inside;
+            changed = true;
+        }
+
+        ShowHelpMarker("Experimental. Instead of applying the answer to the next\n"
+                       "frame, the GPU waits for it inside the frame, so\n"
+                       "nothing follows motion vectors and nothing trails.\n"
+                       "The network keeps its history, which steadies the\n"
+                       "detail. But it makes every frame take longer\n"
+                       "(measured: about twice as long as without it)");
+
+        ImGui::EndDisabled();
 
         dlss5nr_status status {};
         NeuralRendering::GetStatus(status);
