@@ -5758,7 +5758,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("DLSS 5 Neural Rendering, running on this GPU through\n"
+        ShowTooltip("DLSS 5 Neural Rendering, running on this GPU through\n"
                        "the dlss5nr runtime. The network runs beside the game\n"
                        "and its result is carried along the motion vectors,\n"
                        "so a slow network lowers how often the image is\n"
@@ -5774,7 +5774,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("Run the network on the upscaler's input, at render\n"
+            ShowTooltip("Run the network on the upscaler's input, at render\n"
                            "resolution: much cheaper, and what moving objects\n"
                            "uncover shows far less; somewhat lower quality");
         }
@@ -5798,7 +5798,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("The game waits for the network on every frame and its\n"
+        ShowTooltip("The game waits for the network on every frame and its\n"
                        "answer is applied to that very frame: no trails\n"
                        "behind moving objects, but the frame rate becomes\n"
                        "the network's. Best with a low network resolution,\n"
@@ -5813,7 +5813,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("Experimental. Instead of applying the answer to the next\n"
+        ShowTooltip("Experimental. Instead of applying the answer to the next\n"
                        "frame, the GPU waits for it inside the frame, so\n"
                        "nothing follows motion vectors and nothing trails.\n"
                        "The network keeps its history, which steadies the\n"
@@ -5848,7 +5848,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("The network's resolution as a fraction of the output.\n"
+            ShowTooltip("The network's resolution as a fraction of the output.\n"
                            "Its cost follows its pixels");
         }
 
@@ -5882,7 +5882,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 config->NrSkinStructure = automatic ? -1.0f : 1.0f;
                 changed = true;
             }
-            ShowHelpMarker("The detail the network adds to faces and skin: pores,\n"
+            ShowTooltip("The detail the network adds to faces and skin: pores,\n"
                            "shading, texture. Auto follows Local structure; untick\n"
                            "to set it yourself, where 0 leaves them as the game drew them");
 
@@ -5903,7 +5903,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("How many times the effect is applied, one on top of the\n"
+        ShowTooltip("How many times the effect is applied, one on top of the\n"
                        "other: each pass works on the result of the one before.\n"
                        "More passes give a stronger effect, but too many look\n"
                        "artificial and shift the colours. Each pass takes as long\n"
@@ -5917,7 +5917,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             changed = true;
         }
 
-        ShowHelpMarker("Applies Local tone on every pass. Because the passes\n"
+        ShowTooltip("Applies Local tone on every pass. Because the passes\n"
                        "stack, the lighting is pushed further each time: untick\n"
                        "it to apply the local tone only on the first pass");
 
@@ -5926,15 +5926,15 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
         if (auto ch = ScopedCollapsingHeader("Composition##nr"); ch.IsHeaderOpen())
         {
             slider("Detail##nr", config->NrDetailStrength, 0.0f, 2.0f);
-            ShowHelpMarker("How much of the network's light and detail is applied:\n"
+            ShowTooltip("How much of the network's light and detail is applied:\n"
                            "0 the game's image, 1 the network's, above 1 amplified");
 
             slider("Colour##nr", config->NrColourStrength, 0.0f, 4.0f);
-            ShowHelpMarker("0 keeps the game's hue, 1 takes the network's,\n"
+            ShowTooltip("0 keeps the game's hue, 1 takes the network's,\n"
                            "above 1 its colour is pushed further");
 
             slider("Max ratio##nr", config->NrMaxRatio, 1.0f, 8.0f);
-            ShowHelpMarker("The most a pixel may be brightened or darkened by the\n"
+            ShowTooltip("The most a pixel may be brightened or darkened by the\n"
                            "network: keeps a stale or odd result from flickering");
 
             if (int frames = config->NrBlendFrames.value_or_default();
@@ -5943,7 +5943,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 config->NrBlendFrames = frames;
                 changed = true;
             }
-            ShowHelpMarker("How many frames a new result takes to replace the one\n"
+            ShowTooltip("How many frames a new result takes to replace the one\n"
                            "before. The network decides some of its detail anew with\n"
                            "every result, which shows as a flicker when it switches:\n"
                            "blending over a few frames smooths that out. 0 switches\n"
@@ -5956,7 +5956,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("The network's result arrives a few frames late: this\n"
+            ShowTooltip("The network's result arrives a few frames late: this\n"
                            "moves it along the motion vectors to where the scene is\n"
                            "now. Off, it trails behind moving objects");
 
@@ -5969,7 +5969,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("Lets the network blend each result with its previous\n"
+            ShowTooltip("Lets the network blend each result with its previous\n"
                            "one, as it does on NVIDIA cards. Off, every result\n"
                            "is the network's answer for that frame alone");
 
@@ -5980,7 +5980,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("Tints what the network never saw, because it was hidden\n"
+            ShowTooltip("Tints what the network never saw, because it was hidden\n"
                            "or off screen when its frame was captured. Cyan and blue:\n"
                            "its answer was found in this result or the one before.\n"
                            "Green: only its light was filled in from around.\n"
@@ -5992,7 +5992,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("Frames a result is carried along the motion vectors\n"
+            ShowTooltip("Frames a result is carried along the motion vectors\n"
                            "before it starts to fade");
 
             const char* encodings[] = { "Auto", "Linear (HDR)", "Display encoded" };
@@ -6003,7 +6003,7 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                 changed = true;
             }
 
-            ShowHelpMarker("How the game's colour relates to the finished image\n"
+            ShowTooltip("How the game's colour relates to the finished image\n"
                            "the network expects. Auto follows the game's HDR flag");
 
             const char* exposures[] = { "Auto", "Game", "Fixed" };
