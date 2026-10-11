@@ -2783,10 +2783,6 @@ void MenuCommon::RenderUpscalerStateMessage(RenderMenuContext& ctx)
         else
             ImGui::SetWindowFontScale(menuResScale);
     }
-    // Neural rendering also runs on the finished image, with no upscaler at all.
-    if ((currentFeature == nullptr || !currentFeature->IsInited() || currentFeature->IsFrozen()) &&
-        state.swapchainApi == DX12)
-        RenderNeuralRenderingSettings(ctx, false);
 }
 
 static const char* ApiName(API api);
@@ -8281,15 +8277,24 @@ const MenuCommon::MenuBox* MenuCommon::GetMenuBoxes(size_t& count)
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderUpscaleRatioSettings); } },
         { "output_scaling", "Upscaling", "Output Scaling",
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderOutputScalingSettings); } },
-        { "neural_rendering", "Upscaling", "Neural Rendering (DLSS 5)",
-          [](RenderMenuContext& c) {
-              if (IsUpscalerActive(c.currentFeature) && c.currentFeature->Api() == API::DX12)
-                  RenderCard(c, [](RenderMenuContext& x) { RenderNeuralRenderingSettings(x, true); });
-          } },
         { "shader_times", "Upscaling", "Per shader GPU times",
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderShaderTimes); } },
         { "magnifier", "Upscaling", "Magnifier",
           [](RenderMenuContext& c) { if (IsUpscalerActive(c.currentFeature)) RenderCard(c, RenderMagnifierSettings); } },
+
+        // With an upscaler at work it runs on the upscaler's frame, without one on the finished image
+        { "neural_rendering", "Neural Rendering", "Neural Rendering (DLSS 5)",
+          [](RenderMenuContext& c) {
+              if (IsUpscalerActive(c.currentFeature) && c.currentFeature->IsInited())
+              {
+                  if (c.currentFeature->Api() == API::DX12)
+                      RenderCard(c, [](RenderMenuContext& x) { RenderNeuralRenderingSettings(x, true); });
+              }
+              else if (c.state.swapchainApi == DX12)
+              {
+                  RenderCard(c, [](RenderMenuContext& x) { RenderNeuralRenderingSettings(x, false); });
+              }
+          } },
 
         { "fg_selection", "Frame Gen", "Frame Generation", [](RenderMenuContext& c) { RenderCard(c, RenderFrameGenerationSelection); } },
         { "fg_fsrfg", "Frame Gen", "FSR FG Settings", nullptr, RenderFrameGenerationRuntimeSettings },
@@ -8520,6 +8525,11 @@ void MenuCommon::RenderMainMenuTabs(RenderMenuContext& ctx)
     static const Tab tabs[] = {
         { "MAIN", "Custom", "Boxes picked in Menu > Custom Tab.", RenderCustomTab },
         { "MAIN", "Upscaling", "Backend, sharpness and output scaling.", RenderUpscalerStateMessage },
+        { "MAIN", "Neural Rendering", "DLSS 5 neural rendering: the network, its look and how it follows motion.",
+          nullptr, false,
+          +[](RenderMenuContext& c) {
+              return c.state.swapchainApi == DX12 || (c.currentFeature != nullptr && c.currentFeature->Api() == API::DX12);
+          } },
         { "MAIN", "Frame Gen", "Frame generation source, output and pacing." },
         { "MAIN", "Latency & FPS", "Frame limiter, low latency and V-Sync." },
         { "SYSTEM", "Textures", "Mipmap bias and anisotropic filtering." },
