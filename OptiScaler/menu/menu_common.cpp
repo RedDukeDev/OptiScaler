@@ -6320,6 +6320,20 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                            "Its cost follows its pixels");
         }
 
+        // The presets are numbered in the order the library carries its networks. Version
+        // 310.9.16 has two; 0 leaves the choice to the library, which takes the second.
+        const char* presets[] = { "Library default", "Preset 1 (larger)", "Preset 2 (smaller, faster)" };
+        if (int preset = std::clamp(config->NrPreset.value_or_default(), 0, 2);
+            ImGui::Combo("Network##nr", &preset, presets, 3))
+        {
+            config->NrPreset = preset;
+            changed = true;
+        }
+        ShowTooltip("Which network the library runs. Library default is the one\n"
+                       "NVIDIA's library picks. Preset 1 is the larger network the\n"
+                       "earlier versions of the library carried: slower. Preset 2 is\n"
+                       "the smaller one. A change restarts the network");
+
         const char* styles[] = { "Default", "Natural", "Cinematic" };
         if (int style = config->NrStyle.value_or_default(); ImGui::Combo("Style##nr", &style, styles, 3))
         {

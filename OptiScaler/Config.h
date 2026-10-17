@@ -483,6 +483,7 @@ class Config
     CustomOptional<bool> NrNetworkHistory { false };
     CustomOptional<bool> NrWaitForNetwork { false };
     CustomOptional<int32_t> NrPasses { 1 };
+    CustomOptional<int32_t> NrPreset { 0 };
     CustomOptional<bool> NrKeepLocalTone { true };
     CustomOptional<int32_t> NrBlendFrames { 4 };
     CustomOptional<bool> NrWaitInside { false };

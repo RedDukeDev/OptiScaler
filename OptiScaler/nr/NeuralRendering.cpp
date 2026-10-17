@@ -231,6 +231,7 @@ void NeuralRendering::PushSettings()
     settings.show_tracking = config->NrShowTracking.value_or_default() ? 1 : 0;
     settings.wait_for_network = config->NrWaitForNetwork.value_or_default() ? 1 : 0;
     settings.passes = config->NrPasses.value_or_default();
+    settings.network_preset = config->NrPreset.value_or_default();
     settings.keep_local_tone = config->NrKeepLocalTone.value_or_default() ? 1 : 0;
     settings.blend_frames = config->NrBlendFrames.value_or_default();
     settings.wait_inside = config->NrWaitInside.value_or_default() ? 1 : 0;
