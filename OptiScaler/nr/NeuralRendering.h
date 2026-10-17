@@ -9,6 +9,10 @@
 // what OptiScaler already knows about the game's frame: the upscaler's inputs
 // and output, the command list, and the moment of Present.
 //
+// A Direct3D 11 game works through OptiScaler's Direct3D 11 to 12 bridge (Dx11WithDx12): the runtime
+// is a Direct3D 12 one, so the game's textures are copied into shared ones and the result copied
+// back, at each of the places below.
+//
 // Where it runs:
 //   before the upscaler (default)  on the upscaler's colour input, at render
 //                                  resolution (NrPreUpscale): much cheaper,
@@ -22,7 +26,10 @@
 //                                  when none is in use): no depth and no motion
 //                                  vectors, and the game's interface included
 
+#include <d3d11.h>
 #include <d3d12.h>
+
+#include <with_dx12/dx11_with_dx12.h>
 #include <dxgi1_4.h>
 
 #include <filesystem>
@@ -57,6 +64,20 @@ class NeuralRendering
     // At Present, before the frame's fence: enhances the back buffer itself
     // when no upscaler is doing it. Whether it did.
     static bool WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue);
+    // The same for a Direct3D 11 game, through OptiScaler's Direct3D 11 to 12 bridge: the back
+    // buffer goes to the runtime in a shared texture and the result comes back in another.
+    static bool WithoutUpscalerDx11(IDXGISwapChain* swapChain, ID3D11Device* device);
+    // The same two stages for a Direct3D 11 upscaler, through the bridge: before it, the colour it
+    // should read instead of the game's (or nullptr); after it, the buffer it writes into and the
+    // composition of that buffer into the output.
+    static ID3D11Resource* BeforeUpscaleDx11(ID3D11Device* device, ID3D11DeviceContext* context,
+                                             NVSDK_NGX_Parameter* parameters, IFeature* feature);
+    static ID3D11Resource* AfterUpscaleBufferDx11(ID3D11Device* device, ID3D11Resource* like);
+    static bool AfterUpscaleDx11(ID3D11Device* device, ID3D11DeviceContext* context, NVSDK_NGX_Parameter* parameters,
+                                 IFeature* feature, ID3D11Resource* input, ID3D11Resource* output);
+
+    // At Present, in a Direct3D 11 game: the same as Present(queue), on the bridge's queue.
+    static void PresentDx11();
     // True while that is how the effect runs.
     static bool RunsWithoutUpscaler();
 
@@ -79,6 +100,24 @@ class NeuralRendering
   private:
     static bool EnsureRuntime(ID3D12Device* device);
     static void PushSettings();
+    // Depth, motion vectors and exposure of a Direct3D 11 game, as the bridge's shared textures.
+    struct Dx11Inputs
+    {
+        ID3D12Resource* depth;
+        ID3D12Resource* motion;
+        ID3D12Resource* exposure;
+    };
+    // A pair of the bridge's shared textures: the image to read and the result to write.
+    struct Dx11Slot
+    {
+        Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C* input;
+        Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C* output;
+    };
+    static bool PrepareDx11(ID3D11Device* device, ID3D11DeviceContext* context);
+    static bool ProcessDx11(NVSDK_NGX_Parameter* parameters, IFeature* feature, ID3D11Resource* input, Dx11Slot& slot,
+                            bool beforeUpscale);
+    static bool ComposeFinished(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source,
+                                ID3D12Resource* dest, const dlss5nr_frame* prefilled = nullptr);
     static bool FillFrame(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* parameters, IFeature* feature,
-                          dlss5nr_frame& frame, bool beforeUpscale);
+                          dlss5nr_frame& frame, bool beforeUpscale, const Dx11Inputs* dx11 = nullptr);
 };

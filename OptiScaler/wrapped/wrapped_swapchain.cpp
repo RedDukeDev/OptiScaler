@@ -338,6 +338,14 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         _dx11Device = true;
         State::Instance().swapchainApi = DX11;
         State::Instance().currentD3D11Device = device;
+
+        // With no upscaler in the game, the finished image is all there is to enhance, and this
+        // is the last moment to do it: the menu is drawn over it further down.
+        if (willPresent)
+        {
+            NeuralRendering::WithoutUpscalerDx11(pSwapChain, device);
+            NeuralRendering::PresentDx11();
+        }
     }
     else if (pDevice->QueryInterface(IID_PPV_ARGS(&cq)) == S_OK)
     {

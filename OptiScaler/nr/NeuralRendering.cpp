@@ -4,7 +4,9 @@
 
 #include <Config.h>
 #include <State.h>
+#include <Util.h>
 #include <upscalers/IFeature.h>
+#include <with_dx12/dx11_with_dx12.h>
 
 #include <vector>
 
@@ -62,6 +64,10 @@ ID3D12Resource* _aloneInput = nullptr;
 ID3D12Resource* _aloneOutput = nullptr;
 UINT64 _aloneWidth = 0;
 UINT _aloneHeight = 0;
+// With a Direct3D 11 game: the finished image copied into a texture both APIs can open, and the
+// texture the result comes back in.
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11Input = {};
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11Output = {};
 
 void Retire(ID3D12Resource*& resource)
 {
@@ -262,6 +268,7 @@ bool NeuralRendering::EnsureRuntime(ID3D12Device* device)
         return false;
 
     _tried = true;
+    const double began = Util::MillisecondsNow();
 
     auto directory = RuntimeDirectory();
     auto library = directory / L"dlss5nr_runtime.dll";
@@ -274,6 +281,8 @@ bool NeuralRendering::EnsureRuntime(ID3D12Device* device)
                   GetLastError());
         return false;
     }
+
+    LOG_INFO("Neural rendering: runtime library loaded in {:.0f} ms", Util::MillisecondsNow() - began);
 
 #define BIND(field, name)                                                                                              \
     _api.field = (decltype(_api.field)) GetProcAddress(_module, name);                                                 \
@@ -314,22 +323,24 @@ bool NeuralRendering::EnsureRuntime(ID3D12Device* device)
     // Before the runtime loads anything: from here its thread's library
     // loads pass the hooks untouched.
     _loaderThread = _api.loaderThread(_context);
-    LOG_INFO("Neural rendering runtime started from {}", wstring_to_string(directory.wstring()));
+    LOG_INFO("Neural rendering runtime started from {} in {:.0f} ms", wstring_to_string(directory.wstring()),
+             Util::MillisecondsNow() - began);
     return true;
 }
 
 bool NeuralRendering::FillFrame(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* parameters, IFeature* feature,
-                                dlss5nr_frame& frame, bool beforeUpscale)
+                                dlss5nr_frame& frame, bool beforeUpscale, const Dx11Inputs* dx11)
 {
     auto config = Config::Instance();
 
     frame.struct_size = sizeof(frame);
     frame.command_list = cmd;
 
-    frame.depth = GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_Depth);
-    frame.motion = GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_MotionVectors);
-    frame.depth_state = StateFromConfig(config->DepthResourceBarrier);
-    frame.motion_state = StateFromConfig(config->MVResourceBarrier);
+    // From a Direct3D 11 game they are the bridge's shared copies, in the common state.
+    frame.depth = dx11 ? dx11->depth : GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_Depth);
+    frame.motion = dx11 ? dx11->motion : GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_MotionVectors);
+    frame.depth_state = dx11 ? D3D12_RESOURCE_STATE_COMMON : StateFromConfig(config->DepthResourceBarrier);
+    frame.motion_state = dx11 ? D3D12_RESOURCE_STATE_COMMON : StateFromConfig(config->MVResourceBarrier);
     frame.depth_width = feature->RenderWidth();
     frame.depth_height = feature->RenderHeight();
 
@@ -350,10 +361,10 @@ bool NeuralRendering::FillFrame(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parame
     parameters->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &frame.motion_scale_y);
     frame.depth_inverted = feature->DepthInverted() ? 1 : 0;
 
-    frame.exposure = feature->AutoExposure()
-                         ? nullptr
-                         : GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_ExposureTexture);
-    frame.exposure_state = StateFromConfig(config->ExposureResourceBarrier);
+    frame.exposure = feature->AutoExposure() ? nullptr
+                     : dx11                  ? dx11->exposure
+                                             : GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_ExposureTexture);
+    frame.exposure_state = dx11 ? D3D12_RESOURCE_STATE_COMMON : StateFromConfig(config->ExposureResourceBarrier);
     frame.pre_exposure = 1.0f;
     parameters->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, &frame.pre_exposure);
 
@@ -477,6 +488,242 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
     if (got != S_OK || backBuffer == nullptr)
         return false;
 
+    const bool composed = ComposeFinished(device, queue, backBuffer, backBuffer);
+    backBuffer->Release();
+    return composed;
+}
+
+bool NeuralRendering::WithoutUpscalerDx11(IDXGISwapChain* swapChain, ID3D11Device* device)
+{
+    if (_presentsSinceUpscaler < kPresentsWithoutUpscaler)
+        ++_presentsSinceUpscaler;
+
+    if (!RunsWithoutUpscaler() || !RuntimePresent() || swapChain == nullptr || device == nullptr)
+        return false;
+
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    if (context == nullptr)
+        return false;
+
+    // OptiScaler's own bridge from Direct3D 11 to Direct3D 12: the device and queue the runtime
+    // will work on, shared textures and the fences between the two.
+    Dx11WithDx12::Init(device, context);
+    context->Release();
+
+    auto device12 = Dx11WithDx12::GetD3D12Device();
+    auto queue12 = Dx11WithDx12::GetD3D12CommandQueue();
+    auto context11 = Dx11WithDx12::GetD3D11DeviceContext();
+    if (device12 == nullptr || queue12 == nullptr || context11 == nullptr || !EnsureRuntime(device12))
+        return false;
+
+    ID3D11Texture2D* backBuffer = nullptr;
+    if (swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)) != S_OK || backBuffer == nullptr)
+        return false;
+
+    // The back buffer's content, in a texture both APIs can open; and a second one, for the
+    // result to come back in.
+    const UINT64 frameId = Dx11WithDx12::NextUpscalerFrameId();
+    bool done = false;
+
+    if (Dx11WithDx12::PrepareTextureFrom11To12("nr finished image", device12, backBuffer, &_dx11Input, true, false,
+                                               false, frameId) &&
+        Dx11WithDx12::PrepareTextureFrom11To12("nr composed image", device12, backBuffer, &_dx11Output, false, false,
+                                               false, frameId) &&
+        Dx11WithDx12::SyncDx11ToDx12())
+    {
+        if (ComposeFinished(device12, queue12, _dx11Input.Dx12Resource, _dx11Output.Dx12Resource) &&
+            Dx11WithDx12::SyncDx12ToDx11())
+        {
+            context11->CopyResource(backBuffer, _dx11Output.SharedTexture);
+            done = true;
+        }
+    }
+
+    backBuffer->Release();
+    return done;
+}
+
+void NeuralRendering::PresentDx11()
+{
+    // The queue the bridge's work went to; there is none until a Direct3D 11 game has used it.
+    if (auto queue = Dx11WithDx12::GetD3D12CommandQueue(); queue != nullptr)
+        Present(queue);
+}
+
+// ---------------------------------------------------------------- with a Direct3D 11 upscaler
+//
+// The upscaler's own inputs go through the same bridge as the finished image does: shared copies of
+// colour, depth and motion vectors for the runtime, and the result in a shared texture.
+
+namespace
+{
+Dx11WithDx12::D3D11_UPSCALER_RESOURCE_CACHE_C _dx11Cache = {};
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11PreInput = {};
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11PreOutput = {};
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11PostInput = {};
+Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C _dx11PostOutput = {};
+ID3D11Texture2D* _dx11PostBuffer = nullptr;
+UINT _dx11Frame = 0;
+
+ID3D11Resource* Dx11Parameter(NVSDK_NGX_Parameter* parameters, const char* name)
+{
+    ID3D11Resource* resource = nullptr;
+    if (parameters->Get(name, &resource) != NVSDK_NGX_Result_Success)
+        parameters->Get(name, (void**) &resource);
+
+    return resource;
+}
+} // namespace
+
+// The bridge's objects, and the runtime on its device; false when any is missing.
+bool NeuralRendering::PrepareDx11(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+    if (!RuntimePresent() || device == nullptr || context == nullptr)
+        return false;
+
+    Dx11WithDx12::Init(device, context);
+
+    auto device12 = Dx11WithDx12::GetD3D12Device();
+    return device12 != nullptr && Dx11WithDx12::GetD3D12CommandQueue() != nullptr &&
+           Dx11WithDx12::GetD3D11DeviceContext() != nullptr && EnsureRuntime(device12);
+}
+
+// Colour (or the upscaler's output), depth and motion through the network, between two Direct3D 11
+// textures. `result` is the shared texture the answer is in, once SyncDx12ToDx11 has been called.
+bool NeuralRendering::ProcessDx11(NVSDK_NGX_Parameter* parameters, IFeature* feature, ID3D11Resource* input,
+                                  Dx11Slot& slot, bool beforeUpscale)
+{
+    auto device12 = Dx11WithDx12::GetD3D12Device();
+    auto queue12 = Dx11WithDx12::GetD3D12CommandQueue();
+
+    const bool dontUseNTShared = Config::Instance()->DontUseNTShared.value_or_default();
+    auto mask = Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
+    if (!feature->AutoExposure())
+        mask |= Dx11WithDx12::ResourceMask::Exposure;
+
+    const UINT64 frameId = Dx11WithDx12::NextUpscalerFrameId();
+    const UINT frameIndex = _dx11Frame++;
+
+    // Depth, motion vectors and exposure are the game's, copied to shared textures.
+    if (!Dx11WithDx12::PrepareUpscalerResources(_dx11Cache, parameters, mask, frameIndex, frameId, dontUseNTShared,
+                                                false, false)
+             .Success)
+        return false;
+
+    if (!Dx11WithDx12::PrepareTextureFrom11To12("nr image", device12, input, slot.input, true, false, dontUseNTShared,
+                                                frameId) ||
+        !Dx11WithDx12::PrepareTextureFrom11To12("nr result", device12, input, slot.output, false, false,
+                                                dontUseNTShared, frameId))
+        return false;
+
+    if (!Dx11WithDx12::SyncDx11ToDx12())
+        return false;
+
+    Dx11Inputs inputs {};
+    inputs.depth = _dx11Cache.CurrentDepth().Dx12Resource;
+    inputs.motion = _dx11Cache.CurrentMv().Dx12Resource;
+    inputs.exposure = _dx11Cache.Exposure.Dx12Resource;
+
+    dlss5nr_frame frame {};
+    if (!FillFrame(nullptr, parameters, feature, frame, beforeUpscale, &inputs))
+        return false;
+
+    PushSettings();
+
+    if (!ComposeFinished(device12, queue12, slot.input->Dx12Resource, slot.output->Dx12Resource, &frame))
+        return false;
+
+    _presentsSinceUpscaler = 0;
+    return Dx11WithDx12::SyncDx12ToDx11();
+}
+
+ID3D11Resource* NeuralRendering::BeforeUpscaleDx11(ID3D11Device* device, ID3D11DeviceContext* context,
+                                                   NVSDK_NGX_Parameter* parameters, IFeature* feature)
+{
+    if (!Enabled() || !PreUpscale() || !PrepareDx11(device, context))
+        return nullptr;
+
+    auto color = Dx11Parameter(parameters, NVSDK_NGX_Parameter_Color);
+    if (color == nullptr)
+        return nullptr;
+
+    Dx11Slot slot { &_dx11PreInput, &_dx11PreOutput };
+    if (!ProcessDx11(parameters, feature, color, slot, true))
+        return nullptr;
+
+    return _dx11PreOutput.SharedTexture;
+}
+
+ID3D11Resource* NeuralRendering::AfterUpscaleBufferDx11(ID3D11Device* device, ID3D11Resource* like)
+{
+    if (like == nullptr || device == nullptr)
+        return nullptr;
+
+    ID3D11Texture2D* texture = nullptr;
+    if (like->QueryInterface(IID_PPV_ARGS(&texture)) != S_OK)
+        return nullptr;
+
+    D3D11_TEXTURE2D_DESC wanted {};
+    texture->GetDesc(&wanted);
+    texture->Release();
+
+    // The upscaler writes it, and the bridge reads it.
+    wanted.MipLevels = 1;
+    wanted.ArraySize = 1;
+    wanted.Usage = D3D11_USAGE_DEFAULT;
+    wanted.CPUAccessFlags = 0;
+    wanted.MiscFlags = 0;
+    wanted.BindFlags |= D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+
+    if (_dx11PostBuffer != nullptr)
+    {
+        D3D11_TEXTURE2D_DESC current {};
+        _dx11PostBuffer->GetDesc(&current);
+        if (current.Width == wanted.Width && current.Height == wanted.Height && current.Format == wanted.Format &&
+            current.BindFlags == wanted.BindFlags)
+            return _dx11PostBuffer;
+
+        _dx11PostBuffer->Release();
+        _dx11PostBuffer = nullptr;
+    }
+
+    if (device->CreateTexture2D(&wanted, nullptr, &_dx11PostBuffer) != S_OK)
+    {
+        LOG_ERROR("Can't create the neural rendering buffer for a Direct3D 11 upscaler ({}x{}, format {})",
+                  wanted.Width, wanted.Height, (int) wanted.Format);
+        _dx11PostBuffer = nullptr;
+    }
+
+    return _dx11PostBuffer;
+}
+
+bool NeuralRendering::AfterUpscaleDx11(ID3D11Device* device, ID3D11DeviceContext* context,
+                                       NVSDK_NGX_Parameter* parameters, IFeature* feature, ID3D11Resource* input,
+                                       ID3D11Resource* output)
+{
+    if (PrepareDx11(device, context))
+    {
+        Dx11Slot slot { &_dx11PostInput, &_dx11PostOutput };
+        if (ProcessDx11(parameters, feature, input, slot, false))
+        {
+            Dx11WithDx12::GetD3D11DeviceContext()->CopyResource(output, _dx11PostOutput.SharedTexture);
+            return true;
+        }
+    }
+
+    // No runtime, or no frame to give it: the stage still has to fill its output.
+    context->CopyResource(output, input);
+    return true;
+}
+
+// The finished image through the network, between two resources in the common state (a swap
+// chain's back buffer is in it as well when it waits to be presented): source is read, the
+// result is written to dest, which may be source itself. Submits to queue. Whether the network's
+// answer was composed in; when it was not, dest has not been touched.
+bool NeuralRendering::ComposeFinished(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source,
+                                      ID3D12Resource* dest, const dlss5nr_frame* prefilled)
+{
     // The list, its allocators and the fence that says when one is free again.
     if (_aloneList == nullptr)
     {
@@ -493,7 +740,6 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
         {
             LOG_ERROR("Neural rendering without an upscaler: can't create its command list");
             _aloneFailed = true;
-            backBuffer->Release();
             return false;
         }
 
@@ -510,18 +756,15 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
         WaitForSingleObject(_aloneEvent, 1000);
     }
 
-    auto description = backBuffer->GetDesc();
+    auto description = source->GetDesc();
     const bool resized = description.Width != _aloneWidth || description.Height != _aloneHeight;
     _aloneWidth = description.Width;
     _aloneHeight = description.Height;
 
     const auto shown = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto written = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    if (!EnsureBuffer(device, _aloneInput, backBuffer, shown) || !EnsureBuffer(device, _aloneOutput, backBuffer, written))
-    {
-        backBuffer->Release();
+    if (!EnsureBuffer(device, _aloneInput, source, shown) || !EnsureBuffer(device, _aloneOutput, source, written))
         return false;
-    }
 
     PushSettings();
 
@@ -532,38 +775,53 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
     // A back buffer is neither readable by a shader nor writable as an
     // unordered access view in general: it is copied out, and the result
     // copied back.
-    Barrier(cmd, backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Barrier(cmd, source, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
     Barrier(cmd, _aloneInput, shown, D3D12_RESOURCE_STATE_COPY_DEST);
-    cmd->CopyResource(_aloneInput, backBuffer);
+    cmd->CopyResource(_aloneInput, source);
     Barrier(cmd, _aloneInput, D3D12_RESOURCE_STATE_COPY_DEST, shown);
 
+    // With an upscaler the caller has described the frame (depth, motion, exposure, size, HDR);
+    // on a finished image there is only the image.
     dlss5nr_frame frame {};
+    if (prefilled != nullptr)
+        frame = *prefilled;
     frame.struct_size = sizeof(frame);
     frame.command_list = cmd;
     frame.input = _aloneInput;
     frame.input_state = shown;
     frame.output = _aloneOutput;
     frame.output_state = written;
-    frame.width = (uint32_t) description.Width;
-    frame.height = description.Height;
-    frame.pre_exposure = 1.0f;
-    // A floating point back buffer is scRGB: linear light, and beyond 1.
-    frame.hdr = description.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1 : 0;
-    frame.reset = resized ? 1 : 0;
+    if (prefilled == nullptr)
+    {
+        frame.width = (uint32_t) description.Width;
+        frame.height = description.Height;
+        frame.pre_exposure = 1.0f;
+        // A floating point back buffer is scRGB: linear light, and beyond 1.
+        frame.hdr = description.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1 : 0;
+        frame.reset = resized ? 1 : 0;
+    }
 
     const bool composed = _api.process(_context, &frame) == 0;
 
     if (composed)
     {
         Barrier(cmd, _aloneOutput, written, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        Barrier(cmd, backBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-        cmd->CopyResource(backBuffer, _aloneOutput);
-        Barrier(cmd, backBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+        if (dest == source)
+        {
+            Barrier(cmd, dest, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        else
+        {
+            Barrier(cmd, source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+            Barrier(cmd, dest, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        cmd->CopyResource(dest, _aloneOutput);
+        Barrier(cmd, dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
         Barrier(cmd, _aloneOutput, D3D12_RESOURCE_STATE_COPY_SOURCE, written);
     }
     else
     {
-        Barrier(cmd, backBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+        Barrier(cmd, source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     }
 
     cmd->Close();
@@ -572,7 +830,6 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
     queue->Signal(_aloneFence, ++_aloneFenceValue);
     _aloneAllocatorFence[slot] = _aloneFenceValue;
 
-    backBuffer->Release();
     return composed;
 }
 

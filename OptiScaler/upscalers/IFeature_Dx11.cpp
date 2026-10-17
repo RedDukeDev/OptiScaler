@@ -1,6 +1,7 @@
 #include <pch.h>
 #include "IFeature_Dx11.h"
 #include <State.h>
+#include <nr/NeuralRendering.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -128,6 +129,20 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NGX_Par
 
     // Order is important as that's the order of shader dispatch
     std::vector<ShaderPass> pipeline;
+
+    // Neural rendering after the upscaler: the first stage, reading exactly what the upscaler wrote.
+    // Before the upscaler it replaces the colour input instead (below).
+    if (NeuralRendering::Enabled() && !NeuralRendering::PreUpscale() && NeuralRendering::RuntimePresent())
+    {
+        pipeline.push_back(
+            { // Setup
+              [&](ID3D11Resource* nextOutput) -> ID3D11Resource*
+              { return NeuralRendering::AfterUpscaleBufferDx11(Device, nextOutput); },
+
+              // Dispatch
+              [&](ID3D11Resource* input, ID3D11Resource* output) -> bool
+              { return NeuralRendering::AfterUpscaleDx11(Device, InDeviceContext, InParameters, this, input, output); } });
+    }
 
     if (useOutputScaling)
     {
@@ -261,11 +276,30 @@ bool IFeature_Dx11::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NGX_Par
     // Upscaler will write to the first active shader, or just output
     InParameters->Set(NVSDK_NGX_Parameter_Output, currentTarget);
 
+    // Neural rendering before the upscaler: the upscaler reads the enhanced colour for this call
+    // only; the game's own is put back right after.
+    ID3D11Resource* nrGameColor = nullptr;
+    if (NeuralRendering::Enabled() && NeuralRendering::PreUpscale() && NeuralRendering::RuntimePresent())
+    {
+        if (InParameters->Get(NVSDK_NGX_Parameter_Color, &nrGameColor) != NVSDK_NGX_Result_Success)
+            InParameters->Get(NVSDK_NGX_Parameter_Color, (void**) &nrGameColor);
+
+        auto enhanced = NeuralRendering::BeforeUpscaleDx11(Device, InDeviceContext, InParameters, this);
+
+        if (enhanced != nullptr)
+            InParameters->Set(NVSDK_NGX_Parameter_Color, enhanced);
+        else
+            nrGameColor = nullptr;
+    }
+
     UpscalerTime->Start(InDeviceContext);
 
     auto evalResult = EvaluateInternal(InDeviceContext, InParameters);
 
     UpscalerTime->End(InDeviceContext);
+
+    if (nrGameColor != nullptr)
+        InParameters->Set(NVSDK_NGX_Parameter_Color, nrGameColor);
 
     if (!evalResult)
         result = false;
