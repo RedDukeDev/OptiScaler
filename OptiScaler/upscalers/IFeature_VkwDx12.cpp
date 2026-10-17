@@ -10,6 +10,7 @@
 
 #include <hooks/VulkanwDx12_Hooks.h>
 #include <with_dx12/with_dx12.h>
+#include <nr/NeuralRendering.h>
 
 #include <misc/IdentifyGpu.h>
 
@@ -1700,6 +1701,10 @@ bool IFeature_VkwDx12::CopyBackOutput(VkCommandBuffer InCmdBuffer)
         CancelAndDrainQueuedWait();
         return false;
     }
+
+    // Neural rendering's capture is in the list just submitted: the runtime hands it to the network now,
+    // with the queue it went to (there is no Direct3D 12 swap chain to do it at present).
+    NeuralRendering::Present(Dx12CommandQueue);
 
     LOG_DEBUG("Prepared Vulkan w/Dx12 transaction: resource={}, d3d12={}, copyBack={}", pendingResourceCopyValue,
               d3d12CompleteValue, copyBackValue);
