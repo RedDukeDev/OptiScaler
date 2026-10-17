@@ -460,12 +460,19 @@ bool NeuralRendering::RunsWithoutUpscaler()
     return Enabled() && !_aloneFailed && _presentsSinceUpscaler >= kPresentsWithoutUpscaler;
 }
 
-bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue)
+bool NeuralRendering::WantsFinishedImage()
 {
     if (_presentsSinceUpscaler < kPresentsWithoutUpscaler)
         ++_presentsSinceUpscaler;
 
-    if (!RunsWithoutUpscaler() || !RuntimePresent() || swapChain == nullptr || queue == nullptr)
+    return RunsWithoutUpscaler() && RuntimePresent();
+}
+
+bool NeuralRendering::PrepareVulkan(ID3D12Device* device) { return RuntimePresent() && EnsureRuntime(device); }
+
+bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue)
+{
+    if (!WantsFinishedImage() || swapChain == nullptr || queue == nullptr)
         return false;
 
     ID3D12Device* device = nullptr;
@@ -495,10 +502,7 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
 
 bool NeuralRendering::WithoutUpscalerDx11(IDXGISwapChain* swapChain, ID3D11Device* device)
 {
-    if (_presentsSinceUpscaler < kPresentsWithoutUpscaler)
-        ++_presentsSinceUpscaler;
-
-    if (!RunsWithoutUpscaler() || !RuntimePresent() || swapChain == nullptr || device == nullptr)
+    if (!WantsFinishedImage() || swapChain == nullptr || device == nullptr)
         return false;
 
     ID3D11DeviceContext* context = nullptr;

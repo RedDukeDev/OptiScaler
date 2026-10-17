@@ -24,6 +24,8 @@
 
 #include <detours/detours.h>
 #include <misc/IdentifyGpu.h>
+#include <nr/NeuralRendering.h>
+#include <nr/NeuralRenderingVk.h>
 
 #include "Hook_Utils.h"
 
@@ -475,6 +477,11 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         }
     }
 
+    // Neural rendering shares fences with Direct3D 12 as timeline semaphores
+    if (NeuralRendering::Enabled() && !State::Instance().vulkanSkipHooks && !State::Instance().creatingD3DDevice &&
+        !IsDxgiBackedCaller(_ReturnAddress()))
+        EnableTimelineSemaphores(physicalDevice, localCreteInfo, timelineSemaphoreFeatures);
+
     VulkanSpoofing::hkvkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
@@ -484,6 +491,12 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         fg->OnDeviceCreated(*pDevice);
         HookDevice(*pDevice);
         Hudfix_Vk::HookDevice(*pDevice);
+    }
+
+    if (result == VK_SUCCESS && !State::Instance().vulkanSkipHooks && !State::Instance().creatingD3DDevice &&
+        !IsDxgiBackedCaller(_ReturnAddress()))
+    {
+        NeuralRenderingVk::DeviceCreated(_instance, physicalDevice, *pDevice, &localCreteInfo);
     }
 
     if (result == VK_SUCCESS && Config::Instance()->OverlayMenu.value_or_default())
@@ -619,6 +632,10 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     VkPresentInfoKHR localPresentInfo {};
     memcpy(&localPresentInfo, pPresentInfo, sizeof(VkPresentInfoKHR));
 
+    // neural rendering on the finished image, under the menu
+    if (!dxgiBacked)
+        NeuralRenderingVk::QueuePresent(queue, &localPresentInfo);
+
     // render menu if needed
     if (!dxgiBacked && !MenuOverlayVk::QueuePresent(queue, &localPresentInfo))
     {
@@ -687,19 +704,25 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     // dxvk/vkd3d-proton swapchains get the menu on the DXGI swapchain
     const bool dxgiBacked = IsDxgiBackedCaller(_ReturnAddress());
 
-    // Menu blur copies the swapchain image
+    // Menu blur copies the swapchain image, and so does neural rendering, both ways
     VkSwapchainCreateInfoKHR localCreateInfo {};
-    if (pCreateInfo != nullptr && Config::Instance()->OverlayMenu.value_or_default() &&
-        !State::Instance().vulkanSkipHooks && !dxgiBacked && _PD != VK_NULL_HANDLE &&
-        (pCreateInfo->imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0)
+    VkImageUsageFlags extraUsage = NeuralRenderingVk::SwapchainUsage();
+    if (Config::Instance()->OverlayMenu.value_or_default())
+        extraUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+    if (pCreateInfo != nullptr && extraUsage != 0 && !State::Instance().vulkanSkipHooks && !dxgiBacked &&
+        _PD != VK_NULL_HANDLE && (pCreateInfo->imageUsage & extraUsage) != extraUsage)
     {
         VkSurfaceCapabilitiesKHR surfaceCaps {};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_PD, pCreateInfo->surface, &surfaceCaps) == VK_SUCCESS &&
-            (surfaceCaps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0)
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_PD, pCreateInfo->surface, &surfaceCaps) == VK_SUCCESS)
         {
-            localCreateInfo = *pCreateInfo;
-            localCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-            pCreateInfo = &localCreateInfo;
+            const VkImageUsageFlags usable = extraUsage & surfaceCaps.supportedUsageFlags;
+            if ((pCreateInfo->imageUsage & usable) != usable)
+            {
+                localCreateInfo = *pCreateInfo;
+                localCreateInfo.imageUsage |= usable;
+                pCreateInfo = &localCreateInfo;
+            }
         }
     }
 
@@ -769,6 +792,7 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
         _device = device;
         LOG_DEBUG("_device captured: {0:X}", (UINT64) _device);
 
+        NeuralRenderingVk::SwapchainCreated(device, pCreateInfo, *pSwapchain);
         MenuOverlayVk::CreateSwapchain(device, _PD, _instance, _hwnd, pCreateInfo, pAllocator, pSwapchain);
     }
 
@@ -787,6 +811,8 @@ static void hkvkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, c
 
     if (swapchain != VK_NULL_HANDLE)
         VulkanHooks::ForgetLowLatencySwapchain(swapchain);
+
+    NeuralRenderingVk::SwapchainDestroyed(swapchain);
 
     if (auto fg = State::Instance().currentVkFG; fg != nullptr)
     {

@@ -76,6 +76,11 @@ class NeuralRendering
     static bool AfterUpscaleDx11(ID3D11Device* device, ID3D11DeviceContext* context, NVSDK_NGX_Parameter* parameters,
                                  IFeature* feature, ID3D11Resource* input, ID3D11Resource* output);
 
+    // For the Vulkan bridge (NeuralRenderingVk): counts a present and says whether the finished
+    // image is to be enhanced; and makes sure the runtime is up on the bridge's Direct3D 12 device.
+    static bool WantsFinishedImage();
+    static bool PrepareVulkan(ID3D12Device* device);
+
     // At Present, in a Direct3D 11 game: the same as Present(queue), on the bridge's queue.
     static void PresentDx11();
     // True while that is how the effect runs.
@@ -98,6 +103,8 @@ class NeuralRendering
     static void ApplySettings();
 
   private:
+    friend class NeuralRenderingVk;
+
     static bool EnsureRuntime(ID3D12Device* device);
     static void PushSettings();
     // Depth, motion vectors and exposure of a Direct3D 11 game, as the bridge's shared textures.

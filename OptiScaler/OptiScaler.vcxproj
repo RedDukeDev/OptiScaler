@@ -492,6 +492,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscalers\IFeature_Dx11.h" />
     <ClInclude Include="upscalers\IFeature_Dx12.h" />
     <ClInclude Include="nr\NeuralRendering.h" />
+    <ClInclude Include="nr\NeuralRenderingVk.h" />
     <ClInclude Include="nr\dlss5nr.h" />
     <ClInclude Include="upscalers\IFeature.h" />
     <ClInclude Include="upscalers\IFeature_Vk.h" />
@@ -761,6 +762,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="upscalers\IFeature.cpp" />
     <ClCompile Include="upscalers\IFeature_Dx12.cpp" />
     <ClCompile Include="nr\NeuralRendering.cpp" />
+    <ClCompile Include="nr\NeuralRenderingVk.cpp" />
     <ClCompile Include="inputs\FfxApi_Dx12.cpp" />
     <ClCompile Include="inputs\FSR2_Dx12.cpp" />
     <ClCompile Include="inputs\FSR3_Dx12.cpp" />

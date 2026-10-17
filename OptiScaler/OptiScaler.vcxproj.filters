@@ -65,6 +65,9 @@
     <ClInclude Include="nr\NeuralRendering.h">
       <Filter>nr</Filter>
     </ClInclude>
+    <ClInclude Include="nr\NeuralRenderingVk.h">
+      <Filter>nr</Filter>
+    </ClInclude>
     <ClInclude Include="nr\dlss5nr.h">
       <Filter>nr</Filter>
     </ClInclude>
@@ -1185,6 +1188,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="nr\NeuralRendering.cpp">
+      <Filter>nr</Filter>
+    </ClCompile>
+    <ClCompile Include="nr\NeuralRenderingVk.cpp">
       <Filter>nr</Filter>
     </ClCompile>
     <ClCompile Include="upscalers\xess\XeSSFeature.cpp">
