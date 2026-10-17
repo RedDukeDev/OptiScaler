@@ -14,6 +14,7 @@
 #include <proxies/IGDExt_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
+#include <hooks/Reflex_Hooks.h>
 
 #include <detours/detours.h>
 
@@ -1541,6 +1542,7 @@ static HRESULT hkD3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Minimum
                 reflexConst.mode = sl::ReflexMode::eLowLatency;
                 reflexConst.useMarkersToOptimize = false;
 
+                ScopedOptiScalerReflex optiScalerCall {};
                 auto result = StreamlineProxy::ReflexSetOptions()(reflexConst);
                 LOG_TRACE("ReflexSetOptions");
             }
@@ -2302,7 +2304,10 @@ static void HookToDevice(ID3D12Device* InDevice)
         ResTrack_Dx12::HookDevice(InDevice);
     }
 
-    if (State::Instance().activeFgOutput == FGOutput::DLSSG && StreamlineProxy::LoadStreamline())
+    // Vulkan games can create D3D12 devices before their Vulkan one, which needs Streamline initialized for Vulkan.
+    // D3D12 games get it initialized with their FG swapchain otherwise.
+    if (State::Instance().activeFgOutput == FGOutput::DLSSG && vulkanModule == nullptr &&
+        StreamlineProxy::LoadStreamline())
     {
         StreamlineProxy::InitWithD3D12(InDevice);
     }

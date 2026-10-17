@@ -370,6 +370,18 @@ std::filesystem::path Util::ExePath()
     return exe;
 }
 
+// ReShade checks for "d3d12" in its own name so also accept d3d12-ReShade64.dll
+std::filesystem::path Util::ReShadePath()
+{
+    auto dir = ExePath().parent_path();
+    auto rsFile = dir / L"ReShade64.dll";
+
+    if (!std::filesystem::exists(rsFile) && std::filesystem::exists(dir / L"d3d12-ReShade64.dll"))
+        rsFile = dir / L"d3d12-ReShade64.dll";
+
+    return rsFile;
+}
+
 static BOOL CALLBACK EnumWindowsCallback(HWND handle, LPARAM lParam)
 {
     const auto isMainWindow = [handle]()
@@ -486,7 +498,15 @@ bool Util::GetFileVersion(std::wstring dllPath, version_t* fileVersionOut, versi
 
 bool Util::IsSubpath(const std::filesystem::path& path, const std::filesystem::path& base)
 {
-    auto rel = std::filesystem::relative(path, base);
+    auto lowerPath = path.lexically_normal().wstring();
+    auto lowerBase = base.lexically_normal().wstring();
+    to_lower_in_place(lowerPath);
+    to_lower_in_place(lowerBase);
+
+    auto rel = std::filesystem::path(lowerPath).lexically_relative(lowerBase);
+    if (rel.empty())
+        return false;
+
     auto first = *rel.begin();
     return first != "." && first != "..";
 }
