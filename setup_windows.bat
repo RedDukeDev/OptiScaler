@@ -175,8 +175,8 @@ goto selectFilename
 :askBridge
 echo.
 echo This game is 32-bit. OptiScaler itself is 64-bit and cannot run inside it, but a small 32-bit part can
-echo hand the game's frames to a 64-bit helper that runs the network. It works with Direct3D 9 games, and
-echo has its own menu in the game ^(Insert^), with the settings kept in OptiScaler.ini.
+echo hand the game's frames to a 64-bit helper that runs the network. It works with Direct3D 9 and Direct3D 11
+echo games, and has its own menu in the game ^(Insert^), with the settings kept in OptiScaler.ini.
 echo.
 echo  [1] Yes - install the 32-bit bridge ^(default^)
 echo  [2] No
@@ -189,25 +189,12 @@ set "useBridge=1"
 :installBridge
 echo.
 echo Installing the 32-bit bridge...
-if exist d3d9.dll (
-    fc /b d3d9.dll bridge32\d3d9.dll >nul 2>&1
-    if errorlevel 1 (
-        if exist d3d9_chain.dll (
-            echo.
-            echo WARNING: d3d9.dll and d3d9_chain.dll are both here already, so d3d9.dll was left alone.
-            echo Rename or remove one of them and run this again.
-            goto end
-        )
-        ren d3d9.dll d3d9_chain.dll
-        echo The d3d9.dll that was here is now d3d9_chain.dll: the bridge loads it.
-    )
-)
-copy /Y bridge32\d3d9.dll d3d9.dll >nul
-if errorlevel 1 (
-    echo.
-    echo ERROR: could not copy d3d9.dll. Most likely due to folder permissions issues.
-    goto end
-)
+REM One part for each of the two ways a game can draw: d3d9.dll for Direct3D 9, dxgi.dll for Direct3D 10 and 11.
+REM The game loads whichever it uses, so there is no need to know which.
+call :installClient d3d9
+if errorlevel 1 goto end
+call :installClient dxgi
+if errorlevel 1 goto end
 REM The neural rendering is on from the start, in the section the bridge reads.
 if exist OptiScaler.ini powershell -NoProfile -Command "$l=Get-Content OptiScaler.ini; $in=$false; for($i=0;$i -lt $l.Count;$i++){ if($l[$i] -match '^\['){ $in=($l[$i] -eq '[NeuralRendering]') }; if($in -and $l[$i] -eq 'Enabled=auto'){ $l[$i]='Enabled=true' } }; $l | Set-Content OptiScaler.ini"
 REM OptiScaler.dll itself is not used in a 32-bit game.
@@ -215,6 +202,32 @@ if exist OptiScaler.dll del OptiScaler.dll
 echo.
 echo The bridge is installed. In the game, Insert opens its menu.
 goto create_uninstaller
+
+:installClient
+REM %1 is the name of the DLL without its extension. A DLL of that name that was here is kept as %1_chain.dll,
+REM which the bridge loads in its place.
+if not exist "bridge32\%1.dll" exit /b 0
+if exist "%1.dll" (
+    fc /b "%1.dll" "bridge32\%1.dll" >nul 2>&1
+    if errorlevel 1 (
+        if exist "%1_chain.dll" (
+            echo.
+            echo WARNING: %1.dll and %1_chain.dll are both here already, so %1.dll was left alone.
+            echo Rename or remove one of them and run this again.
+            exit /b 1
+        )
+        ren "%1.dll" "%1_chain.dll"
+        echo The %1.dll that was here is now %1_chain.dll: the bridge loads it.
+    )
+)
+copy /Y "bridge32\%1.dll" "%1.dll" >nul
+if errorlevel 1 (
+    echo.
+    echo ERROR: could not copy %1.dll. Most likely due to folder permissions issues.
+    exit /b 1
+)
+echo Installed %1.dll
+exit /b 0
 
 REM Prompt user to select a filename for OptiScaler
 :selectFilename
@@ -637,17 +650,19 @@ echo     ^)
 echo     del setup_linux.sh remove_optiscaler.sh ^>nul 2^>^&1
 echo     echo.
 echo     echo Deleting the 32-bit bridge, if the package put it here
-echo     if exist bridge32\d3d9.dll if exist d3d9.dll ^(
-echo         fc /b d3d9.dll bridge32\d3d9.dll ^>nul 2^>^&1
-echo         if not errorlevel 1 ^(
-echo             del d3d9.dll
-echo             rem the d3d9.dll that was here before goes back
-echo             if exist d3d9_chain.dll ren d3d9_chain.dll d3d9.dll
+echo     for %%%%N in ^(d3d9 dxgi^) do ^(
+echo         if exist bridge32\%%%%N.dll if exist %%%%N.dll ^(
+echo             fc /b %%%%N.dll bridge32\%%%%N.dll ^>nul 2^>^&1
+echo             if not errorlevel 1 ^(
+echo                 del %%%%N.dll
+echo                 rem the DLL that was here before goes back
+echo                 if exist %%%%N_chain.dll ren %%%%N_chain.dll %%%%N.dll
+echo             ^)
 echo         ^)
 echo     ^)
-echo     del dlss5nr_bridge.log ^>nul 2^>^&1
+echo     del dlss5nr_bridge.log dlss5nr_bridge_dxgi.log ^>nul 2^>^&1
 echo     if exist bridge32 ^(
-echo         del /Q bridge32\d3d9.dll bridge32\README.txt ^>nul 2^>^&1
+echo         del /Q bridge32\d3d9.dll bridge32\dxgi.dll bridge32\README.txt ^>nul 2^>^&1
 echo         rd bridge32 2^>nul
 echo     ^)
 echo     echo.
