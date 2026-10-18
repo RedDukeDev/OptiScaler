@@ -138,11 +138,32 @@ if exist ".\Engine" (
     set continueChoice=!continueChoice: =!
 
     if "!continueChoice!"=="1" (
-        goto selectFilename
+        goto askDxvk
     )
 
     goto end
 )
+
+REM Direct3D 9 and 10 games have no support in OptiScaler itself, but through DXVK (shipped in dxvk\x64)
+REM they are Vulkan and Direct3D 11 games, and the neural rendering works on those.
+:askDxvk
+set "useDxvk=0"
+set "dxvkChoice="
+if not exist "dxvk\x64\d3d9.dll" goto selectFilename
+echo.
+echo Is this a Direct3D 9 or Direct3D 10 game? OptiScaler cannot enhance those on their own,
+echo but it can through DXVK, which comes with this package and is copied beside the game.
+echo ^(On Linux, Proton already has DXVK: choose 1 there.^)
+echo.
+echo  [1] No - Direct3D 11, Direct3D 12 or Vulkan ^(default^)
+echo  [2] Direct3D 9, through DXVK
+echo  [3] Direct3D 10, through DXVK
+echo.
+set /p dxvkChoice="Enter 1-3 (or press Enter for default): "
+if "%dxvkChoice%"=="2" set "useDxvk=2"
+if "%dxvkChoice%"=="3" set "useDxvk=3"
+if "%useDxvk%"=="0" goto selectFilename
+call :checkBitness
 
 REM Prompt user to select a filename for OptiScaler
 :selectFilename
@@ -159,7 +180,11 @@ echo  [6] wininet.dll
 echo  [7] winhttp.dll
 echo  [8] OptiScaler.asi
 echo.
+if not "%useDxvk%"=="0" echo DXVK uses dxgi.dll and the game never loads d3d12.dll: choose another name, version.dll is the default.
+if not "%useDxvk%"=="0" echo.
+set "filenameChoice="
 set /p filenameChoice="Enter 1-8 (or press Enter for default): "
+if "%filenameChoice%"=="" if not "%useDxvk%"=="0" set "filenameChoice=3"
 
 if "%filenameChoice%"=="" (
     set selectedFilename="dxgi.dll"
@@ -183,6 +208,19 @@ if "%filenameChoice%"=="" (
     echo Invalid choice. Please select a valid option.
     echo.
     goto selectFilename
+)
+
+if not "%useDxvk%"=="0" (
+    if /i %selectedFilename%=="dxgi.dll" (
+        echo.
+        echo With DXVK, OptiScaler cannot be dxgi.dll: that name is DXVK's.
+        goto selectFilename
+    )
+    if /i %selectedFilename%=="d3d12.dll" (
+        echo.
+        echo A Direct3D 9 or 10 game never loads d3d12.dll.
+        goto selectFilename
+    )
 )
 
 if exist %selectedFilename% (
@@ -391,6 +429,7 @@ if errorlevel 1 (
     goto end
 )
 
+if not "%useDxvk%"=="0" call :installDxvk
 goto create_uninstaller
 
 :create_uninstaller_return
@@ -414,6 +453,42 @@ if "%setupSuccess%"=="true" (
     del "%~nx0"
 )
 
+exit /b
+
+:installDxvk
+REM Direct3D 9 needs d3d9.dll; Direct3D 10 runs on DXVK's Direct3D 11, which needs these three.
+echo.
+echo Copying DXVK...
+set "dxvkFiles=d3d9.dll"
+if "%useDxvk%"=="3" set "dxvkFiles=dxgi.dll d3d10core.dll d3d11.dll"
+for %%F in (%dxvkFiles%) do (
+    set "dxvkCopy=1"
+    if exist "%%F" (
+        fc /b "%%F" "dxvk\x64\%%F" >nul 2>&1
+        if errorlevel 1 (
+            set "dxvkCopy=0"
+            echo WARNING: a different %%F is already here, so DXVK's was not copied. Delete it and copy
+            echo dxvk\x64\%%F beside the game by hand if it is not needed.
+        )
+    )
+    if "!dxvkCopy!"=="1" (
+        copy /Y "dxvk\x64\%%F" "%%F" >nul
+        echo Copied %%F
+    )
+)
+exit /b
+
+:checkBitness
+REM OptiScaler is 64-bit: a game that is only 32-bit cannot load it, with or without DXVK.
+set "gameBits="
+for /f "usebackq tokens=*" %%B in (`powershell -NoProfile -Command "$r=@();foreach($f in Get-ChildItem *.exe){try{$s=[IO.File]::OpenRead($f.FullName);$b=New-Object byte[] 4096;$null=$s.Read($b,0,4096);$s.Close();$o=[BitConverter]::ToInt32($b,60);$r+=[BitConverter]::ToUInt16($b,$o+4)}catch{}};if($r -contains 34404){'64'}elseif($r -contains 332){'32'}else{'?'}"`) do (
+    set "gameBits=%%B"
+)
+if "!gameBits!"=="32" (
+    echo.
+    echo WARNING: the executables in this folder are 32-bit. OptiScaler and the neural rendering are
+    echo 64-bit only, so they cannot work in this game.
+)
 exit /b
 
 :create_uninstaller
@@ -501,6 +576,23 @@ echo         rem rd removes a folder only when it is empty, so anything else put
 echo         rd linux 2^>nul
 echo     ^)
 echo     del setup_linux.sh remove_optiscaler.sh ^>nul 2^>^&1
+echo     echo.
+echo     echo Deleting DXVK, if the package put it here
+echo     if exist dxvk\x64 ^(
+echo         rem Only the copies identical to the package's: any other DXVK is not ours
+echo         for %%%%F in ^(d3d9.dll d3d10core.dll d3d11.dll dxgi.dll^) do ^(
+echo             if exist "%%%%F" if exist "dxvk\x64\%%%%F" ^(
+echo                 fc /b "%%%%F" "dxvk\x64\%%%%F" ^>nul 2^>^&1
+echo                 if not errorlevel 1 del "%%%%F"
+echo             ^)
+echo         ^)
+echo         del /Q dxvk\x64\d3d9.dll dxvk\x64\d3d10core.dll dxvk\x64\d3d11.dll dxvk\x64\dxgi.dll ^>nul 2^>^&1
+echo         rd dxvk\x64 2^>nul
+echo     ^)
+echo     if exist dxvk ^(
+echo         del /Q dxvk\LICENSE dxvk\README.txt ^>nul 2^>^&1
+echo         rd dxvk 2^>nul
+echo     ^)
 echo     echo.
 echo     del /Q OptiScaler\*
 echo     rd OptiScaler
