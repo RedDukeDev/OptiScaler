@@ -18,6 +18,7 @@ show_help() {
     echo "  --overwrite=<y|n>       Overwrite existing file (y/n)"
     echo "  --using_nvidia=<y|n>    Using Nvidia GPU (y/n)"
     echo "  --using_dlss=<y|n>      Use DLSS inputs/spoofing (y/n)"
+    echo "  --bridge=<y|n>          For a 32-bit game: install the 32-bit bridge (y/n)"
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Example:"
@@ -33,6 +34,7 @@ for arg in "$@"; do
         --overwrite=*) overwrite_choice="${arg#*=}" ;;
         --using_nvidia=*) using_nvidia="${arg#*=}" ;;
         --using_dlss=*) using_dlss="${arg#*=}" ;;
+        --bridge=*) bridge_choice="${arg#*=}" ;;
     esac
 done
 clear
@@ -184,6 +186,50 @@ select_filename() {
     done
 }
 
+# A 32-bit game cannot load OptiScaler, which is 64-bit. For those the package carries a bridge (bridge32/): a
+# 32-bit d3d9.dll and dxgi.dll that hand the game's frames to a 64-bit helper that runs the network. The helper
+# is a Windows process of its own, in the same Wine prefix as the game.
+
+# The machine type of a PE file: 014c is 32-bit, 8664 is 64-bit.
+pe_machine() {
+    local offset
+    offset=$(od -An -t u4 -j 60 -N 4 "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$offset" ] || return 1
+    od -An -t x2 -j $((offset + 4)) -N 2 "$1" 2>/dev/null | tr -d ' '
+}
+
+# 64 if any executable in the folder is 64-bit, 32 if they are all 32-bit, ? if there are none to tell.
+game_bits() {
+    local f m seen32=0
+    for f in "$SCRIPT_DIR"/*.exe; do
+        [ -f "$f" ] || continue
+        m=$(pe_machine "$f")
+        case "$m" in
+            8664) echo 64; return ;;
+            014c) seen32=1 ;;
+        esac
+    done
+    if [ "$seen32" = 1 ]; then echo 32; else echo '?'; fi
+}
+
+bridge_mode=0
+if [ -f "$SCRIPT_DIR/bridge32/d3d9.dll" ] && [ "$(game_bits)" = "32" ]; then
+    if [ -z "$bridge_choice" ]; then
+        echo ""
+        echo "This game is 32-bit. OptiScaler itself is 64-bit and cannot run inside it, but a small 32-bit part can"
+        echo "hand the game's frames to a 64-bit helper that runs the network. It works with Direct3D 9 and Direct3D 11"
+        echo "games, and has its own menu in the game (Insert), with the settings kept in OptiScaler.ini."
+        echo ""
+        read -r -p "Install the 32-bit bridge? [Y/n]: " bridge_choice
+        bridge_choice=${bridge_choice:-y}
+    fi
+    case "${bridge_choice,,}" in
+        y|yes) bridge_mode=1; selected_filename="OptiScaler.dll" ;;
+    esac
+fi
+
+if [ "$bridge_mode" != "1" ]; then
+
 select_filename
 
 # Try to detect Nvidia
@@ -260,6 +306,8 @@ if ! mv "$OPTISCALER_FILE" "$selected_filename"; then
     exit 1
 fi
 
+fi   # bridge_mode != 1
+
 # Neural rendering (dlss5nr) on Linux: the Windows half of its HIP bridge has to
 # be beside the game's executable, where Wine looks for it first. The rest of
 # what it needs stays in linux/ (see linux/README.txt).
@@ -284,7 +332,60 @@ install_hip_bridge() {
     fi
 }
 
-install_hip_bridge
+[ "$bridge_mode" != "1" ] && install_hip_bridge
+
+# One part of the bridge for each of the two ways a game can draw: d3d9.dll for Direct3D 9, dxgi.dll for Direct3D
+# 10 and 11. The game loads whichever it uses, so there is no need to know which. A DLL of that name that was there
+# is kept as <name>_chain.dll, which the bridge loads in its place.
+install_bridge_client() {
+    local name="$1"
+    local source="$SCRIPT_DIR/bridge32/$name.dll"
+    [ -f "$source" ] || return 0
+    if [ -f "$SCRIPT_DIR/$name.dll" ] && ! cmp -s "$source" "$SCRIPT_DIR/$name.dll"; then
+        if [ -f "$SCRIPT_DIR/${name}_chain.dll" ]; then
+            echo ""
+            echo "WARNING: $name.dll and ${name}_chain.dll are both here already, so $name.dll was left alone."
+            echo "Rename or remove one of them and run this again."
+            return 1
+        fi
+        mv "$SCRIPT_DIR/$name.dll" "$SCRIPT_DIR/${name}_chain.dll"
+        echo "The $name.dll that was here is now ${name}_chain.dll: the bridge loads it."
+    fi
+    if cp -f "$source" "$SCRIPT_DIR/$name.dll"; then
+        echo "Installed $name.dll"
+    else
+        echo "ERROR: could not copy $name.dll."
+        return 1
+    fi
+}
+
+install_bridge() {
+    echo ""
+    echo "Installing the 32-bit bridge..."
+    install_bridge_client d3d9 || return 1
+    install_bridge_client dxgi || return 1
+    # The neural rendering is on from the start, in the section the bridge reads.
+    if [ -f OptiScaler.ini ]; then
+        sed -i '/^\[NeuralRendering\]/,/^\[/ s/^Enabled=auto/Enabled=true/' OptiScaler.ini
+    fi
+    # The 64-bit helper is a process of its own: the Windows half of the HIP bridge has to be where it looks, beside it.
+    if [ -f "$SCRIPT_DIR/linux/amdhip64_7.dll" ] && [ -d "$SCRIPT_DIR/OptiScaler/dlss5nr" ]; then
+        cp -f "$SCRIPT_DIR/linux/amdhip64_7.dll" "$SCRIPT_DIR/OptiScaler/dlss5nr/amdhip64_7.dll" ||
+            echo "WARNING: could not copy amdhip64_7.dll beside the helper."
+    fi
+    chmod +x "$SCRIPT_DIR/linux/launch.sh" 2>/dev/null
+    # OptiScaler.dll itself is not used in a 32-bit game.
+    rm -f "$SCRIPT_DIR/OptiScaler.dll"
+    echo ""
+    echo "The bridge is installed."
+}
+
+if [ "$bridge_mode" = "1" ]; then
+    if ! install_bridge; then
+        read -p "Press Enter to exit..."
+        exit 1
+    fi
+fi
 
 # Create uninstaller
 create_uninstaller() {
@@ -361,6 +462,19 @@ if [ "$remove_choice" = "y" ] || [ "$remove_choice" = "Y" ]; then
     if [ -f linux/launch.sh ]; then
         rm -rf linux
     fi
+
+    # The 32-bit bridge, if it was installed: the DLLs that are still the package's own are removed, and what
+    # was there before comes back
+    for name in d3d9 dxgi; do
+        if [ -f "bridge32/$name.dll" ] && [ -f "$name.dll" ] && cmp -s "$name.dll" "bridge32/$name.dll"; then
+            rm -f "$name.dll"
+            if [ -f "${name}_chain.dll" ]; then
+                mv "${name}_chain.dll" "$name.dll"
+            fi
+        fi
+    done
+    rm -f dlss5nr_bridge.log dlss5nr_bridge_dxgi.log
+    rm -rf bridge32
     
     echo ""
     echo "OptiScaler removed!"
@@ -405,6 +519,19 @@ echo ""
 
 # Display Wine DLL override information
 echo "IMPORTANT FOR LINUX/WINE USERS:"
+if [ "$bridge_mode" = "1" ]; then
+    echo "The bridge is d3d9.dll and dxgi.dll beside the game: Wine has to prefer them to its own. If using Steam,"
+    echo "add this to launch options:"
+    echo ""
+    if [ -f "$SCRIPT_DIR/linux/launch.sh" ]; then
+        echo "WINEDLLOVERRIDES=\"d3d9=n,b;dxgi=n,b\" \"$SCRIPT_DIR/linux/launch.sh\" %COMMAND%"
+    else
+        echo "WINEDLLOVERRIDES=\"d3d9=n,b;dxgi=n,b\" %COMMAND%"
+    fi
+    echo ""
+    echo "Remember: in the game, the Insert key opens the bridge's menu (see bridge32/README.txt)"
+    echo ""
+else
 echo "You might need to add the renamed DLL to Wine overrides"
 echo "Example, if using Steam, add this to launch options:"
 echo ""
@@ -418,6 +545,7 @@ if [ -f "$SCRIPT_DIR/linux/launch.sh" ]; then
 fi
 echo "Remember: Insert key opens OptiScaler overlay, Page Up/Down for performance stats"
 echo ""
+fi
 
 # Cleanup - remove setup script
 if [ $# -eq 0 ]; then
