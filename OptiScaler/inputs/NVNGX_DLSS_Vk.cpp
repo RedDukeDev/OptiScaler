@@ -15,6 +15,7 @@
 #include <ankerl/unordered_dense.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <misc/IdentifyGpu.h>
+#include <nr/NeuralRendering.h>
 
 VkInstance vkInstance;
 VkPhysicalDevice vkPD;
@@ -851,10 +852,19 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_CreateFeature1(VkDevice InDevice
         if (IdentifyGpu::getPrimaryGpu().dlssCapable && NVNGXProxy::IsVulkanInited())
             upscalerChoice = Upscaler::DLSS;
 
-        if (Config::Instance()->VulkanUpscaler.has_value())
+        // With neural rendering on, the upscaler that runs on Direct3D 12 unless the choice is the user's:
+        // its inputs are there, so the neural rendering gets depth and motion vectors, which a native Vulkan
+        // upscaler does not give it (it then works on the finished image at present, and trails).
+        const bool nrChoice = !Config::Instance()->VulkanUpscaler.has_value() && NeuralRendering::Enabled() &&
+                              NeuralRendering::RuntimePresent();
+
+        if (nrChoice)
+            upscalerChoice = Upscaler::FFX_on12;
+        else if (Config::Instance()->VulkanUpscaler.has_value())
             upscalerChoice = Config::Instance()->VulkanUpscaler.value();
 
-        LOG_INFO("Creating new {} upscaler", UpscalerDisplayName(upscalerChoice));
+        LOG_INFO("Creating new {} upscaler{}", UpscalerDisplayName(upscalerChoice),
+                 nrChoice ? " (chosen for neural rendering)" : "");
 
         VkContexts[handleId] = {};
 
@@ -862,6 +872,15 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_CreateFeature1(VkDevice InDevice
         {
             LOG_ERROR("Upscaler can't created");
             return NVSDK_NGX_Result_Fail;
+        }
+
+        // GetFeature records what runs as the setting, to be saved with the rest. That is not what the user
+        // asked for here: back to unset, for the ini to keep saying auto.
+        if (nrChoice)
+        {
+            const auto chosen = Config::Instance()->VulkanUpscaler.value_or_default();
+            Config::Instance()->VulkanUpscaler.reset();
+            Config::Instance()->VulkanUpscaler.set_volatile_value(chosen);
         }
     }
     else if (InFeatureID == NVSDK_NGX_Feature_RayReconstruction)
