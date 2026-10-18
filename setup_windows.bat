@@ -151,17 +151,15 @@ set "useDxvk=0"
 set "dxvkChoice="
 if not exist "dxvk\x64\d3d9.dll" goto selectFilename
 echo.
-echo Is this a Direct3D 9 or Direct3D 10 game? OptiScaler cannot enhance those on their own,
+echo Is this an old game, Direct3D 9 or Direct3D 10? OptiScaler cannot enhance those on their own,
 echo but it can through DXVK, which comes with this package and is copied beside the game.
 echo ^(On Linux, Proton already has DXVK: choose 1 there.^)
 echo.
 echo  [1] No - Direct3D 11, Direct3D 12 or Vulkan ^(default^)
-echo  [2] Direct3D 9, through DXVK
-echo  [3] Direct3D 10, through DXVK
+echo  [2] Yes - Direct3D 9 or 10, through DXVK
 echo.
-set /p dxvkChoice="Enter 1-3 (or press Enter for default): "
+set /p dxvkChoice="Enter 1 or 2 (or press Enter for default): "
 if "%dxvkChoice%"=="2" set "useDxvk=2"
-if "%dxvkChoice%"=="3" set "useDxvk=3"
 if "%useDxvk%"=="0" goto selectFilename
 call :checkBitness
 
@@ -456,11 +454,11 @@ if "%setupSuccess%"=="true" (
 exit /b
 
 :installDxvk
-REM Direct3D 9 needs d3d9.dll; Direct3D 10 runs on DXVK's Direct3D 11, which needs these three.
+REM All of it: Direct3D 9 needs d3d9.dll, Direct3D 10 runs on DXVK's Direct3D 11, which needs the other three,
+REM and the game loads whichever it uses.
 echo.
 echo Copying DXVK...
-set "dxvkFiles=d3d9.dll"
-if "%useDxvk%"=="3" set "dxvkFiles=dxgi.dll d3d10core.dll d3d11.dll"
+set "dxvkFiles=d3d9.dll dxgi.dll d3d10core.dll d3d11.dll"
 for %%F in (%dxvkFiles%) do (
     set "dxvkCopy=1"
     if exist "%%F" (
