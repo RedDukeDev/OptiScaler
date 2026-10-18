@@ -205,6 +205,16 @@ static bool IsDxgiBackedCaller(void* returnAddress)
     return lastResult;
 }
 
+// Neural rendering over DXVK on Windows: native Direct3D 12 cannot open the textures DXVK shares, so the
+// Direct3D 11 bridge is not available for its games (NeuralRendering::Dx11BridgeUnavailable), and they are
+// enhanced here instead, as the Vulkan games they are underneath. Not under Wine: there DXVK and vkd3d-proton do
+// share, and the presents of Direct3D 12 games (vkd3d-proton) are the Direct3D 12 path's.
+static bool NeuralRenderingOnDxvk(void* returnAddress)
+{
+    return NeuralRendering::Enabled() && !State::Instance().isRunningOnLinux &&
+           IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && IsDxgiBackedCaller(returnAddress);
+}
+
 // The game's low latency calls go to the low latency inputs, nullptr for the other functions. dxvk and vkd3d-proton
 // use them for the D3D games' own, those are the D3D inputs.
 static PFN_vkVoidFunction LowLatencyInputHook(const char* pName, PFN_vkVoidFunction orgFunc, void* returnAddress)
@@ -479,7 +489,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
     // Neural rendering shares fences with Direct3D 12 as timeline semaphores
     if (NeuralRendering::Enabled() && !State::Instance().vulkanSkipHooks && !State::Instance().creatingD3DDevice &&
-        !IsDxgiBackedCaller(_ReturnAddress()))
+        (!IsDxgiBackedCaller(_ReturnAddress()) || NeuralRenderingOnDxvk(_ReturnAddress())))
         EnableTimelineSemaphores(physicalDevice, localCreteInfo, timelineSemaphoreFeatures);
 
     VulkanSpoofing::hkvkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
@@ -494,7 +504,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
     }
 
     if (result == VK_SUCCESS && !State::Instance().vulkanSkipHooks && !State::Instance().creatingD3DDevice &&
-        !IsDxgiBackedCaller(_ReturnAddress()))
+        (!IsDxgiBackedCaller(_ReturnAddress()) || NeuralRenderingOnDxvk(_ReturnAddress())))
     {
         NeuralRenderingVk::DeviceCreated(_instance, physicalDevice, *pDevice, &localCreteInfo);
     }
@@ -632,8 +642,9 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     VkPresentInfoKHR localPresentInfo {};
     memcpy(&localPresentInfo, pPresentInfo, sizeof(VkPresentInfoKHR));
 
-    // neural rendering on the finished image, under the menu
-    if (!dxgiBacked)
+    // neural rendering on the finished image, under the menu (for DXVK's Direct3D games, whose menu is the DXGI
+    // swapchain's, over what is done here)
+    if (!dxgiBacked || (State::Instance().swapchainApi == DX11 && NeuralRenderingOnDxvk(_ReturnAddress())))
         NeuralRenderingVk::QueuePresent(queue, &localPresentInfo);
 
     // render menu if needed
@@ -710,8 +721,12 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     if (Config::Instance()->OverlayMenu.value_or_default())
         extraUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
-    if (pCreateInfo != nullptr && extraUsage != 0 && !State::Instance().vulkanSkipHooks && !dxgiBacked &&
-        _PD != VK_NULL_HANDLE && (pCreateInfo->imageUsage & extraUsage) != extraUsage)
+    const bool nrOnDxvk = dxgiBacked && NeuralRenderingOnDxvk(_ReturnAddress());
+    if (dxgiBacked && !nrOnDxvk)
+        extraUsage = 0;
+
+    if (pCreateInfo != nullptr && extraUsage != 0 && !State::Instance().vulkanSkipHooks && _PD != VK_NULL_HANDLE &&
+        (pCreateInfo->imageUsage & extraUsage) != extraUsage)
     {
         VkSurfaceCapabilitiesKHR surfaceCaps {};
         if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_PD, pCreateInfo->surface, &surfaceCaps) == VK_SUCCESS)
@@ -779,6 +794,10 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     if (result == VK_SUCCESS && lowLatencySwapchain)
         VulkanHooks::SetLowLatencySwapchain(*pSwapchain);
 #endif
+
+    if (result == VK_SUCCESS && nrOnDxvk && device != VK_NULL_HANDLE && pCreateInfo != nullptr &&
+        *pSwapchain != VK_NULL_HANDLE && !State::Instance().vulkanSkipHooks)
+        NeuralRenderingVk::SwapchainCreated(device, pCreateInfo, *pSwapchain);
 
     if (result == VK_SUCCESS && device != VK_NULL_HANDLE && pCreateInfo != nullptr && *pSwapchain != VK_NULL_HANDLE &&
         !State::Instance().vulkanSkipHooks && !dxgiBacked)
