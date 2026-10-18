@@ -120,6 +120,7 @@ class NeuralRendering
         Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C* input;
         Dx11WithDx12::D3D11_TEXTURE2D_RESOURCE_C* output;
     };
+    static bool Dx11BridgeUnavailable();
     static bool PrepareDx11(ID3D11Device* device, ID3D11DeviceContext* context);
     static bool ProcessDx11(NVSDK_NGX_Parameter* parameters, IFeature* feature, ID3D11Resource* input, Dx11Slot& slot,
                             bool beforeUpscale);

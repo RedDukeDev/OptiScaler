@@ -7,6 +7,7 @@
 #include <Util.h>
 #include <upscalers/IFeature.h>
 #include <with_dx12/dx11_with_dx12.h>
+#include <misc/IdentifyGpu.h>
 
 #include <vector>
 
@@ -502,7 +503,7 @@ bool NeuralRendering::WithoutUpscaler(IDXGISwapChain* swapChain, ID3D12CommandQu
 
 bool NeuralRendering::WithoutUpscalerDx11(IDXGISwapChain* swapChain, ID3D11Device* device)
 {
-    if (!WantsFinishedImage() || swapChain == nullptr || device == nullptr)
+    if (!WantsFinishedImage() || swapChain == nullptr || device == nullptr || Dx11BridgeUnavailable())
         return false;
 
     ID3D11DeviceContext* context = nullptr;
@@ -530,10 +531,11 @@ bool NeuralRendering::WithoutUpscalerDx11(IDXGISwapChain* swapChain, ID3D11Devic
     const UINT64 frameId = Dx11WithDx12::NextUpscalerFrameId();
     bool done = false;
 
+    const bool dontUseNTShared = Config::Instance()->DontUseNTShared.value_or_default();
     if (Dx11WithDx12::PrepareTextureFrom11To12("nr finished image", device12, backBuffer, &_dx11Input, true, false,
-                                               false, frameId) &&
+                                               dontUseNTShared, frameId) &&
         Dx11WithDx12::PrepareTextureFrom11To12("nr composed image", device12, backBuffer, &_dx11Output, false, false,
-                                               false, frameId) &&
+                                               dontUseNTShared, frameId) &&
         Dx11WithDx12::SyncDx11ToDx12())
     {
         if (ComposeFinished(device12, queue12, _dx11Input.Dx12Resource, _dx11Output.Dx12Resource) &&
@@ -581,9 +583,26 @@ ID3D11Resource* Dx11Parameter(NVSDK_NGX_Parameter* parameters, const char* name)
 } // namespace
 
 // The bridge's objects, and the runtime on its device; false when any is missing.
+// Direct3D 11 over DXVK on Windows: the textures DXVK shares cannot be opened by the native Direct3D 12
+// (the driver crashes in it), so there is no bridge. Under Wine, DXVK and vkd3d-proton do share.
+bool NeuralRendering::Dx11BridgeUnavailable()
+{
+    static bool logged = false;
+    const bool unavailable = !State::Instance().isRunningOnLinux && IdentifyGpu::getPrimaryGpu().dxgiIsDxvk;
+
+    if (unavailable && !logged)
+    {
+        LOG_WARN("Neural rendering: this Direct3D 11 game runs on DXVK, whose textures native Direct3D 12 can't "
+                 "share on Windows: not available");
+        logged = true;
+    }
+
+    return unavailable;
+}
+
 bool NeuralRendering::PrepareDx11(ID3D11Device* device, ID3D11DeviceContext* context)
 {
-    if (!RuntimePresent() || device == nullptr || context == nullptr)
+    if (Dx11BridgeUnavailable() || !RuntimePresent() || device == nullptr || context == nullptr)
         return false;
 
     Dx11WithDx12::Init(device, context);

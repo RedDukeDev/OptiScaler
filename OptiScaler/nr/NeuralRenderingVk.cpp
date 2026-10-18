@@ -284,18 +284,18 @@ bool Prepare()
     ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
     ScopedSkipVulkanHooks skipVulkanHooks {};
 
-    auto getDeviceProcAddr = (PFN_vkGetDeviceProcAddr) vkGetInstanceProcAddr(_instance, "vkGetDeviceProcAddr");
-    if (getDeviceProcAddr != nullptr)
-    {
-        _getMemoryWin32HandleProperties =
-            (PFN_vkGetMemoryWin32HandlePropertiesKHR) getDeviceProcAddr(_device, "vkGetMemoryWin32HandlePropertiesKHR");
-        _importSemaphoreWin32Handle =
-            (PFN_vkImportSemaphoreWin32HandleKHR) getDeviceProcAddr(_device, "vkImportSemaphoreWin32HandleKHR");
-    }
+    // Straight from the device: the instance OptiScaler remembers may be a temporary one the game's
+    // layer (DXVK, say) has already destroyed.
+    _getMemoryWin32HandleProperties =
+        (PFN_vkGetMemoryWin32HandlePropertiesKHR) vkGetDeviceProcAddr(_device, "vkGetMemoryWin32HandlePropertiesKHR");
+    _importSemaphoreWin32Handle =
+        (PFN_vkImportSemaphoreWin32HandleKHR) vkGetDeviceProcAddr(_device, "vkImportSemaphoreWin32HandleKHR");
 
     if (_getMemoryWin32HandleProperties == nullptr || _importSemaphoreWin32Handle == nullptr)
     {
-        LOG_ERROR("Neural rendering in Vulkan: the driver has no external memory or semaphore sharing with Windows");
+        LOG_ERROR("Neural rendering in Vulkan: the device has no external memory or semaphore sharing with "
+                  "Windows (memory: {}, semaphore: {})",
+                  _getMemoryWin32HandleProperties != nullptr, _importSemaphoreWin32Handle != nullptr);
         return false;
     }
 
