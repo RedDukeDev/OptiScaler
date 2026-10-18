@@ -489,6 +489,19 @@ echo     echo Deleting neural rendering, dlss5nr, if present
 echo     if exist OptiScaler\dlss5nr rd /S /Q OptiScaler\dlss5nr
 echo     if exist dlss5nr\dlss5nr_runtime.dll rd /S /Q dlss5nr
 echo     echo.
+echo     echo Deleting the Linux files, if present
+echo     if exist linux\amdhip64_7.dll if exist amdhip64_7.dll ^(
+echo         rem Only the copy setup_linux.sh made: a different amdhip64_7.dll is not ours
+echo         fc /b amdhip64_7.dll linux\amdhip64_7.dll ^>nul 2^>^&1
+echo         if not errorlevel 1 del amdhip64_7.dll
+echo     ^)
+echo     if exist linux ^(
+echo         del /Q linux\amdhip64_7.dll linux\libdlss5nr_hip_bridge.so linux\launch.sh linux\README.txt ^>nul 2^>^&1
+echo         rem rd removes a folder only when it is empty, so anything else put in linux stays
+echo         rd linux 2^>nul
+echo     ^)
+echo     del setup_linux.sh remove_optiscaler.sh ^>nul 2^>^&1
+echo     echo.
 echo     del /Q OptiScaler\*
 echo     rd OptiScaler
 echo     echo.
