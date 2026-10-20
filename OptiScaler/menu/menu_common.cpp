@@ -2,6 +2,7 @@
 #include "menu_common.h"
 #include <inputs/FG/XeFG_Inputs_Dx12.h>
 #include <nr/NeuralRendering.h>
+#include <zluda/DlssZ.h>
 
 #include "input/input_system.h"
 
@@ -767,7 +768,8 @@ void MenuCommon::RenderUpscalerCombo(const API api, Upscaler currentUpscaler, co
     for (auto opt : options)
     {
         // Check if GPU is capable of a given backend
-        if ((opt == Upscaler::DLSS || opt == Upscaler::DLSS_on12) && !primaryGpu.dlssCapable)
+        if ((opt == Upscaler::DLSS || opt == Upscaler::DLSS_on12) && !primaryGpu.dlssCapable &&
+            !(opt == Upscaler::DLSS && api == API::DX12 && DlssZ::Usable(false)))
             continue;
 
         // Not all Intel GPUs support native DX11 XeSS but don't think we have a good way to check exactly

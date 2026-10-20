@@ -8,6 +8,7 @@
 #include <upscalers/IFeature.h>
 #include <with_dx12/dx11_with_dx12.h>
 #include <misc/IdentifyGpu.h>
+#include <zluda/DlssZ.h>
 
 #include <vector>
 
@@ -185,7 +186,22 @@ void Barrier(ID3D12GraphicsCommandList* cmd, ID3D12Resource* resource, D3D12_RES
 
 bool NeuralRendering::Enabled() { return Config::Instance()->NrEnabled.value_or_default(); }
 
-bool NeuralRendering::PreUpscale() { return Config::Instance()->NrPreUpscale.value_or_default(); }
+bool NeuralRendering::PreUpscale()
+{
+    auto config = Config::Instance();
+
+    if (config->NrPreUpscale.has_value())
+        return config->NrPreUpscale.value();
+
+    // DLSS on AMD (DlssZ) is a temporal upscaler that expects its input jittered as the game says: the
+    // network's result is composed from earlier frames, each with another jitter, and fed to it the
+    // detail it adds shows up as noise and blocks. Left to itself it runs after the upscaler.
+    auto feature = State::Instance().currentFeature;
+    if (feature != nullptr && DlssZ::IsDlssZ(feature))
+        return false;
+
+    return config->NrPreUpscale.value_or_default();
+}
 
 std::filesystem::path NeuralRendering::RuntimeDirectory()
 {
@@ -326,6 +342,7 @@ bool NeuralRendering::EnsureRuntime(ID3D12Device* device)
     _loaderThread = _api.loaderThread(_context);
     LOG_INFO("Neural rendering runtime started from {} in {:.0f} ms", wstring_to_string(directory.wstring()),
              Util::MillisecondsNow() - began);
+    DlssZ::InstallFastExit();
     return true;
 }
 

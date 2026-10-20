@@ -8,6 +8,7 @@
 
 #include "upscalers/dlss/DLSSFeature_Dx12.h"
 #include "upscalers/dlssd/DLSSDFeature_Dx12.h"
+#include "upscalers/dlssz/DLSSZFeature_Dx12.h"
 #include "upscalers/fsr2/FSR2Feature_Dx12.h"
 #include "upscalers/fsr2_212/FSR2Feature_Dx12_212.h"
 #include "upscalers/ffx/FFXFeature_Dx12.h"
@@ -47,6 +48,12 @@ bool FeatureProvider_Dx12::GetFeature(Upscaler upscaler, UINT handleId, NVSDK_NG
             *feature = std::make_unique<DLSSFeatureDx12>(handleId, parameters);
             break;
         }
+        else if (DlssZ::Usable(false))
+        {
+            // Not an NVIDIA GPU: NVIDIA's library over ZLUDA, through the dlss5nr runtime
+            *feature = std::make_unique<DLSSZFeatureDx12>(handleId, parameters, false);
+            break;
+        }
         else
         {
             *feature = std::make_unique<FSR2FeatureDx12_212>(handleId, parameters);
@@ -58,6 +65,11 @@ bool FeatureProvider_Dx12::GetFeature(Upscaler upscaler, UINT handleId, NVSDK_NG
         if (primaryGpu.dlssCapable && state.NVNGX_DLSSD_Path.has_value())
         {
             *feature = std::make_unique<DLSSDFeatureDx12>(handleId, parameters);
+            break;
+        }
+        else if (DlssZ::Usable(true))
+        {
+            *feature = std::make_unique<DLSSZFeatureDx12>(handleId, parameters, true);
             break;
         }
         else
@@ -103,7 +115,8 @@ bool FeatureProvider_Dx12::ChangeFeature(Upscaler upscaler, ID3D12Device* device
     if (!state.changeBackend[handleId])
         return false;
 
-    const bool dlssOnNonCapable = !IdentifyGpu::getPrimaryGpu().dlssCapable && state.newBackend == Upscaler::DLSS;
+    const bool dlssOnNonCapable =
+        !IdentifyGpu::getPrimaryGpu().dlssCapable && !DlssZ::Usable(false) && state.newBackend == Upscaler::DLSS;
     if (state.newBackend == Upscaler::Reset || dlssOnNonCapable)
         state.newBackend = cfg.Dx12Upscaler.value_or_default();
 

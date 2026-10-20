@@ -615,6 +615,18 @@ bool Config::Reload(std::filesystem::path iniPath)
             NrSnippetPath.set_from_config(readWString("NeuralRendering", "SnippetPath"));
         }
 
+        // DLSS on AMD
+        {
+            ZludaDlssEnabled.set_from_config(readBool("ZludaDlss", "Enabled"));
+            ZludaDlssSnippetPath.set_from_config(readWString("ZludaDlss", "SnippetPath"));
+            ZludaDlssRrSnippetPath.set_from_config(readWString("ZludaDlss", "RayReconstructionSnippetPath"));
+
+            if (auto setting = readInt("ZludaDlss", "Preset"); setting.has_value())
+                ZludaDlssPreset.set_from_config(std::clamp(setting.value(), 0, 15));
+
+            ZludaFastExit.set_from_config(readBool("ZludaDlss", "FastExit"));
+        }
+
         // Output Scaling
         {
             OutputScalingEnabled.set_from_config(readBool("OutputScaling", "Enabled"));
@@ -1203,6 +1215,18 @@ bool Config::SaveIni()
         ini.SetValue("NeuralRendering", "Exposure", GetFloatValue(config->NrExposure.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "SnippetPath",
                      wstring_to_string(config->NrSnippetPath.value_for_config_or(L"auto")).c_str());
+    }
+
+    // DLSS on AMD
+    {
+        auto config = Instance();
+        ini.SetValue("ZludaDlss", "Enabled", GetBoolValue(config->ZludaDlssEnabled.value_for_config()).c_str());
+        ini.SetValue("ZludaDlss", "SnippetPath",
+                     wstring_to_string(config->ZludaDlssSnippetPath.value_for_config_or(L"auto")).c_str());
+        ini.SetValue("ZludaDlss", "RayReconstructionSnippetPath",
+                     wstring_to_string(config->ZludaDlssRrSnippetPath.value_for_config_or(L"auto")).c_str());
+        ini.SetValue("ZludaDlss", "Preset", GetIntValue(config->ZludaDlssPreset.value_for_config()).c_str());
+        ini.SetValue("ZludaDlss", "FastExit", GetBoolValue(config->ZludaFastExit.value_for_config()).c_str());
     }
 
     // Output Scaling

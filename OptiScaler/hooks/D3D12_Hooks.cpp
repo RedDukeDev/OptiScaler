@@ -15,6 +15,7 @@
 #include <proxies/Streamline_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <hooks/Reflex_Hooks.h>
+#include <zluda/DlssZ.h>
 
 #include <detours/detours.h>
 
@@ -2296,6 +2297,10 @@ static void HookToDevice(ID3D12Device* InDevice)
     }
 
     HookToCommandList(InDevice);
+
+    // DLSS on AMD splits the game's command lists where the upscaler runs: they are tracked from the start.
+    if (DlssZ::WantsEarlyHooks())
+        DlssZ::InstallCommandHooks(realDevice ? realDevice : InDevice, false);
 
     if (State::Instance().activeFgInput == FGInput::Upscaler &&
         !Config::Instance()->FGDisableHUDFix.value_or_default() &&

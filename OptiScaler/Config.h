@@ -494,6 +494,13 @@ class Config
     CustomOptional<float> NrExposure { 1.0f };
     CustomOptional<std::wstring, NoDefault> NrSnippetPath;
 
+    // DLSS super resolution and ray reconstruction on AMD, through the same runtime (zluda/DlssZ.h)
+    CustomOptional<bool> ZludaDlssEnabled { false };
+    CustomOptional<std::wstring, NoDefault> ZludaDlssSnippetPath;
+    CustomOptional<std::wstring, NoDefault> ZludaDlssRrSnippetPath;
+    CustomOptional<int32_t> ZludaDlssPreset { 0 };
+    CustomOptional<bool> ZludaFastExit { true };
+
     // Output Scaling
     CustomOptional<bool> OutputScalingEnabled { false };
     CustomOptional<float> OutputScalingMultiplier { 1.5f };
