@@ -55,6 +55,10 @@ bool WantsEarlyHooks();
 // `late` says it is not done as the device is created: command lists that began before are not tracked and
 // cannot be split, so an upscaler leaves out the first few frames after (see HooksAreSettled).
 bool InstallCommandHooks(ID3D12Device* device, bool late);
+
+// Tags the command signatures as they are made, whenever DLSS on AMD could be picked later (menu included): a
+// list that ran ExecuteIndirect through an untagged signature cannot be split.
+void TrackCommandSignatures(ID3D12Device* device);
 bool CommandHooksInstalled();
 bool HooksAreSettled();
 

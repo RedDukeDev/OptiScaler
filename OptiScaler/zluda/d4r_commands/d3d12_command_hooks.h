@@ -8,6 +8,9 @@ namespace d4r::win::commands {
 // A boundary becomes prefix -> callback -> suffix at ExecuteCommandLists,
 // preserving preceding lists in the caller's batch and current-frame output.
 using Boundary = std::function<void(ID3D12CommandQueue*)>;
+// Tags every command signature made from now on with its argument description, which a split needs to know what an
+// ExecuteIndirect resets. Cheap enough to run before the hooks proper, so an upscaler picked later finds them tagged.
+void track_signatures(ID3D12Device* device);
 void install(ID3D12Device* device);
 void record_boundary(ID3D12GraphicsCommandList* list, Boundary callback);
 std::string error();

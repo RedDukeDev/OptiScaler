@@ -2301,6 +2301,8 @@ static void HookToDevice(ID3D12Device* InDevice)
     // DLSS on AMD splits the game's command lists where the upscaler runs: they are tracked from the start.
     if (DlssZ::WantsEarlyHooks())
         DlssZ::InstallCommandHooks(realDevice ? realDevice : InDevice, false);
+    else
+        DlssZ::TrackCommandSignatures(realDevice ? realDevice : InDevice);
 
     if (State::Instance().activeFgInput == FGInput::Upscaler &&
         !Config::Instance()->FGDisableHUDFix.value_or_default() &&

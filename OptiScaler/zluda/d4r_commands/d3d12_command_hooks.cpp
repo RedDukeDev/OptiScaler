@@ -14,7 +14,7 @@ namespace {
 thread_local bool internal = false;
 std::mutex map_mutex, installation_mutex, error_mutex;
 std::string last_error;
-bool installed = false;
+bool installed = false, signatures_attached = false;
 using Clock = std::chrono::steady_clock;
 bool profile_commands() { static const bool enabled = std::getenv("D4R_PROFILE_STAGES") != nullptr; return enabled; }
 double milliseconds(Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
@@ -558,6 +558,21 @@ ResourceAccess submitted_resource_access(ID3D12Resource* resource, ResourceAcces
     if (SUCCEEDED(resource->GetPrivateData(submitted_access_tag, &size, &submitted)) && size == sizeof(submitted)) return submitted;
     return fallback;
 }
+void track_signatures(ID3D12Device* device) {
+    std::lock_guard<std::mutex> lock(installation_mutex);
+    if (installed || signatures_attached) return;
+    InternalScope scope;
+    const auto init = MH_Initialize();
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) throw std::runtime_error(MH_StatusToString(init));
+    auto deviceTable = *reinterpret_cast<void***>(device);
+    attach_method(deviceTable[device_signature_slot], reinterpret_cast<void*>(hook_signature), reinterpret_cast<void**>(&original_signature), "CreateCommandSignature");
+    const auto result = MH_EnableHook(attached.back().target);
+    if (result != MH_OK) {
+        (void)MH_RemoveHook(attached.back().target); attached.pop_back();
+        throw std::runtime_error(MH_StatusToString(result));
+    }
+    signatures_attached = true;
+}
 void install(ID3D12Device* device) {
     std::lock_guard<std::mutex> lock(installation_mutex);
     if (installed) return;
@@ -598,7 +613,9 @@ void install(ID3D12Device* device) {
         attach_method(queueTable[queue_wait_slot], reinterpret_cast<void*>(hook_queue_wait), reinterpret_cast<void**>(&original_queue_wait), "QueueWait");
         auto deviceTable = *reinterpret_cast<void***>(device);
         attach_method(deviceTable[device_command_list_slot], reinterpret_cast<void*>(hook_create_list), reinterpret_cast<void**>(&original_create_list), "CreateCommandList");
-        attach_method(deviceTable[device_signature_slot], reinterpret_cast<void*>(hook_signature), reinterpret_cast<void**>(&original_signature), "CreateCommandSignature");
+        // Already hooked when the device was created, so every signature the application made carries its description.
+        if (!signatures_attached)
+            attach_method(deviceTable[device_signature_slot], reinterpret_cast<void*>(hook_signature), reinterpret_cast<void**>(&original_signature), "CreateCommandSignature");
         for (const auto& hook : attached) {
             const auto result = MH_QueueEnableHook(hook.target);
             if (result != MH_OK) throw std::runtime_error(MH_StatusToString(result));
@@ -609,7 +626,7 @@ void install(ID3D12Device* device) {
         std::printf("D4R_D3D12_COMMAND_BACKEND installed=1 interface=%u hooks=%zu frame_age=0\n", version, attached.size());
     } catch (...) {
         for (const auto& hook : attached) { (void)MH_DisableHook(hook.target); (void)MH_RemoveHook(hook.target); }
-        attached.clear(); throw;
+        attached.clear(); signatures_attached = false; throw;
     }
 }
 void record_boundary(ID3D12GraphicsCommandList* list, Boundary callback) {

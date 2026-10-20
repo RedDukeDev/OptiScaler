@@ -158,6 +158,21 @@ bool DlssZ::WantsEarlyHooks()
     return asked && Usable(false);
 }
 
+void DlssZ::TrackCommandSignatures(ID3D12Device* device)
+{
+    if (device == nullptr || IdentifyGpu::getPrimaryGpu().dlssCapable || !Usable(false))
+        return;
+
+    try
+    {
+        d4r::win::commands::track_signatures(device);
+    }
+    catch (const std::exception& failure)
+    {
+        LOG_WARN("DLSS on AMD: command signatures could not be tracked: {}", failure.what());
+    }
+}
+
 bool DlssZ::InstallCommandHooks(ID3D12Device* device, bool late)
 {
     std::lock_guard<std::mutex> lock(_hooksMutex);
