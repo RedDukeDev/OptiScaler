@@ -239,10 +239,16 @@ bool FeatureProvider_Dx12::ChangeFeature(Upscaler upscaler, ID3D12Device* device
             state.changeBackend[handleId] = false;
         }
 
-        // If this is an OptiScaler fake NVNGX param table, delete it
+        // If this is an OptiScaler fake NVNGX param table, delete it. Unless it is the table the caller is
+        // using right now (the DLSS passthrough above hands the game's own over, and with FSR inputs that is
+        // a fake table that lives as long as the game's context does): the evaluation that follows reads it.
         int optiParam = 0;
 
-        if (contextData->createParams->Get("OptiScaler", &optiParam) == NVSDK_NGX_Result_Success && optiParam == 1)
+        if (contextData->createParams == parameters)
+        {
+            contextData->createParams = nullptr;
+        }
+        else if (contextData->createParams->Get("OptiScaler", &optiParam) == NVSDK_NGX_Result_Success && optiParam == 1)
         {
             TryDestroyNGXParameters(contextData->createParams, NVNGXProxy::D3D12_DestroyParameters());
             contextData->createParams = nullptr;
