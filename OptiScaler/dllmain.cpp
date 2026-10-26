@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "dllmain.h"
 
+#include <zluda/DlssZ.h>
+
 #include "Util.h"
 #include "Config.h"
 #include "Logger.h"
@@ -1642,6 +1644,19 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         if (State::Instance().activeFgInput == FGInput::NvngxFG)
             State::Instance().activeFgOutput = FGOutput::NoFG;
+
+        // NVIDIA's frame generation as an output needs no Streamline of OptiScaler's: the FSR-FG output paces the
+        // frames and the library makes them, from whatever input gives OptiScaler the frame (the upscaler, or the
+        // game's own Streamline DLSS-G calls). NvngxFG is the other way, with the game's Streamline making the frames.
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
+            State::Instance().activeFgNvngx == FGNvngxReplacement::Nvidia &&
+            State::Instance().activeFgInput != FGInput::NoFG && State::Instance().activeFgInput != FGInput::NvngxFG &&
+            DlssZ::NvidiaFrameGenerationFilesPresent())
+        {
+            spdlog::info("NVIDIA frame generation without Streamline: the FSR-FG output paces the frames");
+            State::Instance().activeFgOutput = FGOutput::FSRFG;
+            State::Instance().fgNvidiaInterpolation = true;
+        }
 
         // XeFG input to XeFG output runs the game's own XeFG, without OptiScaler's FG pipeline
         if (XeFGInputs::Passthrough())

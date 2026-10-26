@@ -4,12 +4,27 @@
 #include "NVNGX_Parameter.h"
 
 #include <proxies/XeSS_Proxy.h>
+#include "FG/XeFG_Inputs_Dx12.h"
 #include "menu/menu_overlay_dx.h"
 
 static UINT64 _handleCounter = 13370000;
 static UINT64 _frameCounter = 0;
 static xess_context_handle_t _currentContext = nullptr;
 static ID3D12Device* _d3d12Device = nullptr;
+static std::map<xess_context_handle_t, xess_2d_t> _createdInputs;
+
+// A feature made for one render size serves the sizes of dynamic resolution (half the output to the whole of it) and
+// no others: a game that starts at another size (a loading screen) needs the feature made again at the one it settles on
+static bool CoversInput(const xess_2d_t& created, const xess_2d_t& now, const xess_2d_t& output)
+{
+    if (created.x == now.x && created.y == now.y)
+        return true;
+
+    auto dynamic = [&](const xess_2d_t& size)
+    { return size.x * 2 >= output.x && size.x <= output.x && size.y * 2 >= output.y && size.y <= output.y; };
+
+    return dynamic(created) && dynamic(now);
+}
 
 static bool CreateDLSSContext(xess_context_handle_t handle, ID3D12GraphicsCommandList* commandList,
                               const xess_d3d12_execute_params_t* pExecParams)
@@ -90,6 +105,7 @@ static bool CreateDLSSContext(xess_context_handle_t handle, ID3D12GraphicsComman
         return false;
 
     _contexts[handle] = nvHandle;
+    _createdInputs[handle] = { pExecParams->inputWidth, pExecParams->inputHeight };
 
     return true;
 }
@@ -171,6 +187,18 @@ xess_result_t hk_xessD3D12Execute(xess_context_handle_t hContext, ID3D12Graphics
     if (pCommandList == nullptr)
         return XESS_RESULT_ERROR_INVALID_ARGUMENT;
 
+    if (_contexts.contains(hContext) && _d3d12InitParams.contains(hContext) &&
+        !CoversInput(_createdInputs[hContext], { pExecParams->inputWidth, pExecParams->inputHeight },
+                     _d3d12InitParams[hContext].outputResolution))
+    {
+        LOG_INFO("XeSS execute: the render size is {}x{}, the feature was made for {}x{}: making it again",
+                 pExecParams->inputWidth, pExecParams->inputHeight, _createdInputs[hContext].x,
+                 _createdInputs[hContext].y);
+
+        NVSDK_NGX_D3D12_ReleaseFeature(_contexts[hContext]);
+        _contexts.erase(hContext);
+    }
+
     if (!_contexts.contains(hContext) && !CreateDLSSContext(hContext, pCommandList, pExecParams))
         return XESS_RESULT_ERROR_UNKNOWN;
 
@@ -220,7 +248,9 @@ xess_result_t hk_xessD3D12Execute(xess_context_handle_t hContext, ID3D12Graphics
     params->Set(NVSDK_NGX_Parameter_Height, pExecParams->inputHeight);
     params->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, pExecParams->inputWidth);
     params->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, pExecParams->inputHeight);
-    params->Set(NVSDK_NGX_Parameter_Depth, pExecParams->pDepthTexture);
+    // Unreal's XeSS with high resolution motion vectors has no depth to give, XeFG's tags have the same one
+    auto depth = pExecParams->pDepthTexture != nullptr ? pExecParams->pDepthTexture : XeFGInputs::GameDepth();
+    params->Set(NVSDK_NGX_Parameter_Depth, depth);
     params->Set(NVSDK_NGX_Parameter_ExposureTexture, pExecParams->pExposureScaleTexture);
 
     if (feature_version { XeSSProxy::Version().major, XeSSProxy::Version().minor, XeSSProxy::Version().patch } <

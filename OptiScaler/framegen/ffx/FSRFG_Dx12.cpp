@@ -8,6 +8,7 @@
 #include <hudfix/Hudfix_Dx11.h>
 #include <hudfix/Hudfix_Dx12.h>
 #include <menu/menu_overlay_dx.h>
+#include <framegen/nvngx/NvInterpolator.h>
 
 #include <magic_enum.hpp>
 #include <DirectXMath.h>
@@ -517,7 +518,11 @@ bool FSRFG_Dx12::Dispatch()
     ffxReturnCode_t loggingRetCode = FfxApiProxy::D3D12_Configure(&_fgContext, &fgLogging.header);
 
     bool dispatchResult = false;
-    if (retCode == FFX_API_RETURN_OK && _isActive)
+    if (retCode == FFX_API_RETURN_OK && _isActive && state.fgNvidiaInterpolation)
+    {
+        dispatchResult = NvidiaSnapshot(fIndex);
+    }
+    else if (retCode == FFX_API_RETURN_OK && _isActive)
     {
         ffxCreateBackendDX12Desc backendDesc {};
         backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
@@ -1033,12 +1038,198 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
         }
     }
 
+    if (state.fgNvidiaInterpolation)
+    {
+        auto nvidiaResult = NvidiaDispatch(params, fIndex);
+        _lastFrameId = params->frameID;
+        return nvidiaResult;
+    }
+
     auto dispatchResult = FfxApiProxy::D3D12_Dispatch(&_fgContext, &params->header);
     LOG_DEBUG("D3D12_Dispatch result: {}, fIndex: {}", (UINT) dispatchResult, fIndex);
 
     _lastFrameId = params->frameID;
 
     return dispatchResult;
+}
+
+// With NVIDIA's interpolation, FSR's own preparation of a frame is replaced by keeping what the library will want when the
+// frame is presented: the game may reuse its depth and motion vector textures by then.
+bool FSRFG_Dx12::NvidiaSnapshot(int index)
+{
+    auto velocity = GetResource(FG_ResourceType::Velocity, index);
+    auto depth = GetResource(FG_ResourceType::Depth, index);
+
+    if (!velocity || !depth || !IsResourceReady(FG_ResourceType::Velocity, index) ||
+        !IsResourceReady(FG_ResourceType::Depth, index))
+    {
+        LOG_WARN("Depth or velocity is missing for NVIDIA frame generation");
+        return false;
+    }
+
+    auto allocator = _fgCommandAllocator[index];
+    auto cmdList = _fgCommandList[index];
+
+    if (allocator->Reset() != S_OK || cmdList->Reset(allocator, nullptr) != S_OK)
+    {
+        LOG_ERROR("The command list for the depth and motion vectors could not be reset");
+        return false;
+    }
+
+    auto keep = [&](LockedDx12Resource& source, ID3D12Resource** target)
+    {
+        if (!CopyResource(cmdList, source->GetResource(), target, source->state))
+            return false;
+
+        // The library's side reads it in this state
+        ResourceBarrier(cmdList, *target, D3D12_RESOURCE_STATE_COPY_DEST,
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        return true;
+    };
+
+    // A copy made before is left readable: it is written again from there. A new one starts in COPY_DEST.
+    if (_nvDepth[index] != nullptr)
+        ResourceBarrier(cmdList, _nvDepth[index], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                        D3D12_RESOURCE_STATE_COPY_DEST);
+
+    if (_nvMotion[index] != nullptr)
+        ResourceBarrier(cmdList, _nvMotion[index], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                        D3D12_RESOURCE_STATE_COPY_DEST);
+
+    const bool kept = keep(depth, &_nvDepth[index]) && keep(velocity, &_nvMotion[index]);
+    cmdList->Close();
+
+    if (!kept)
+        return false;
+
+    _nvRenderWidth[index] = (uint32_t) depth->width;
+    _nvRenderHeight[index] = depth->height;
+
+    if (State::Instance().currentFeature && State::Instance().activeFgInput == FGInput::Upscaler)
+    {
+        _nvRenderWidth[index] = State::Instance().currentFeature->RenderWidth();
+        _nvRenderHeight[index] = State::Instance().currentFeature->RenderHeight();
+    }
+
+    _waitingExecute[index] = true;
+    return ExecuteCommandList(index);
+}
+
+// The callback of the swapchain, where FSR would interpolate: the library does, from what the frame left behind.
+ffxReturnCode_t FSRFG_Dx12::NvidiaDispatch(ffxDispatchDescFrameGeneration* params, int index)
+{
+    auto cmdList = (ID3D12GraphicsCommandList*) params->commandList;
+    auto present = (ID3D12Resource*) params->presentColor.resource;
+    auto output = (ID3D12Resource*) params->outputs[0].resource;
+
+    if (cmdList == nullptr || present == nullptr || output == nullptr || _nvDepth[index] == nullptr ||
+        _nvMotion[index] == nullptr || params->numGeneratedFrames == 0)
+    {
+        params->numGeneratedFrames = 0;
+        return FFX_API_RETURN_OK;
+    }
+
+    // The hudless frame, where there is one: the copy made of it, or the game's own while it is valid
+    ID3D12Resource* hudless = nullptr;
+    D3D12_RESOURCE_STATES hudlessState = D3D12_RESOURCE_STATE_COPY_DEST;
+
+    if (!Config::Instance()->FGDisableHudless.value_or_default())
+    {
+        if (_resourceCopy[index].contains(FG_ResourceType::HudlessColor))
+            hudless = _resourceCopy[index][FG_ResourceType::HudlessColor];
+        else if (auto game = GetResource(FG_ResourceType::HudlessColor, index);
+                 game && game->validity == FG_ResourceValidity::UntilPresent)
+        {
+            hudless = game->GetResource();
+            hudlessState = game->state;
+        }
+    }
+
+    // The interface on its own, if the game gives it
+    ID3D12Resource* ui = nullptr;
+    D3D12_RESOURCE_STATES uiState = D3D12_RESOURCE_STATE_COMMON;
+
+    if (!Config::Instance()->FGDisableUI.value_or_default())
+    {
+        if (auto game = GetResource(FG_ResourceType::UIColor, index); game && IsResourceReady(FG_ResourceType::UIColor, index))
+        {
+            ui = game->GetResource();
+            uiState = game->state;
+        }
+    }
+
+    // The library reads what it is given, and writes the output, from this state
+    constexpr auto readable = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto presentState = GetD3D12State((FfxApiResourceState) params->presentColor.state);
+    const auto outputState = GetD3D12State((FfxApiResourceState) params->outputs[0].state);
+
+    ResourceBarrier(cmdList, present, presentState, readable);
+    ResourceBarrier(cmdList, output, outputState, readable);
+
+    if (hudless != nullptr)
+        ResourceBarrier(cmdList, hudless, hudlessState, readable);
+
+    if (ui != nullptr)
+        ResourceBarrier(cmdList, ui, uiState, readable);
+
+    NvInterpolator::Frame frame;
+    frame.device = _device;
+    frame.commandList = cmdList;
+    frame.backbuffer = present;
+    frame.hudless = hudless;
+    frame.ui = ui;
+    frame.depth = _nvDepth[index];
+    frame.motion = _nvMotion[index];
+    frame.output = output;
+
+    const auto presentDesc = present->GetDesc();
+    frame.displayWidth = (uint32_t) presentDesc.Width;
+    frame.displayHeight = presentDesc.Height;
+    frame.backbufferFormat = presentDesc.Format;
+    frame.renderWidth = _nvRenderWidth[index];
+    frame.renderHeight = _nvRenderHeight[index];
+
+    frame.jitterX = _jitterX[index];
+    frame.jitterY = _jitterY[index];
+    frame.motionScaleX = _mvScaleX[index];
+    frame.motionScaleY = _mvScaleY[index];
+    frame.cameraNear = _cameraNear[index];
+    frame.cameraFar = _cameraFar[index];
+    frame.cameraFov = _cameraVFov[index];
+    frame.cameraAspect = _cameraAspectRatio[index];
+    std::memcpy(frame.cameraPosition, _cameraPosition[index], sizeof frame.cameraPosition);
+    std::memcpy(frame.cameraUp, _cameraUp[index], sizeof frame.cameraUp);
+    std::memcpy(frame.cameraRight, _cameraRight[index], sizeof frame.cameraRight);
+    std::memcpy(frame.cameraForward, _cameraForward[index], sizeof frame.cameraForward);
+
+    const int previous = (index + BUFFER_COUNT - 1) % BUFFER_COUNT;
+    std::memcpy(frame.previousPosition, _cameraPosition[previous], sizeof frame.previousPosition);
+    std::memcpy(frame.previousUp, _cameraUp[previous], sizeof frame.previousUp);
+    std::memcpy(frame.previousRight, _cameraRight[previous], sizeof frame.previousRight);
+    std::memcpy(frame.previousForward, _cameraForward[previous], sizeof frame.previousForward);
+    frame.queue = GetCommandQueue();
+
+    frame.depthInverted = _constants.flags[FG_Flags::InvertedDepth];
+    frame.hdr = _constants.flags[FG_Flags::Hdr];
+    frame.jitteredMotion = _constants.flags[FG_Flags::JitteredMVs];
+    frame.reset = params->reset;
+    frame.frameId = params->frameID;
+
+    const bool generated = NvInterpolator::Evaluate(frame);
+
+    if (ui != nullptr)
+        ResourceBarrier(cmdList, ui, readable, uiState);
+
+    if (hudless != nullptr)
+        ResourceBarrier(cmdList, hudless, readable, hudlessState);
+
+    ResourceBarrier(cmdList, output, readable, outputState);
+    ResourceBarrier(cmdList, present, readable, presentState);
+
+    if (!generated)
+        params->numGeneratedFrames = 0;
+
+    return FFX_API_RETURN_OK;
 }
 
 FSRFG_Dx12::~FSRFG_Dx12() { Shutdown(); }
@@ -1569,6 +1760,9 @@ void FSRFG_Dx12::ReleaseObjects()
     {
         _hudCopy[i].reset();
         _hudlessCompareCompute[i].reset();
+
+        SAFE_RELEASE(_nvDepth[i]);
+        SAFE_RELEASE(_nvMotion[i]);
 
         SAFE_RELEASE(_fgCommandAllocator[i]);
         SAFE_RELEASE(_fgCommandList[i]);

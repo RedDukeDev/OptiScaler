@@ -151,6 +151,10 @@ bool DlssZ::WantsEarlyHooks()
 
     auto& config = *Config::Instance();
 
+    // NVIDIA's frame generation chosen as the NVNGX replacement: it splits the game's lists as the upscaler does.
+    if (config.FGNvngxReplacement.value_or_default() == FGNvngxReplacement::Nvidia && NvidiaFrameGenerationUsable())
+        return true;
+
     // Asked for outright, or the upscaler the configuration names is DLSS.
     const bool asked = config.ZludaDlssEnabled.value_or(config.Dx12Upscaler.has_value() &&
                                                         config.Dx12Upscaler.value() == Upscaler::DLSS);
@@ -160,7 +164,7 @@ bool DlssZ::WantsEarlyHooks()
 
 void DlssZ::TrackCommandSignatures(ID3D12Device* device)
 {
-    if (device == nullptr || IdentifyGpu::getPrimaryGpu().dlssCapable || !Usable(false))
+    if (device == nullptr || IdentifyGpu::getPrimaryGpu().dlssCapable || (!Usable(false) && !NvidiaFrameGenerationUsable()))
         return;
 
     try
@@ -171,6 +175,23 @@ void DlssZ::TrackCommandSignatures(ID3D12Device* device)
     {
         LOG_WARN("DLSS on AMD: command signatures could not be tracked: {}", failure.what());
     }
+}
+
+bool DlssZ::NvidiaFrameGenerationUsable()
+{
+    const auto gpu = IdentifyGpu::getPrimaryGpu();
+    if (gpu.dlssCapable || gpu.vendorId == VendorId::Nvidia)
+        return false;
+
+    return NvidiaFrameGenerationFilesPresent();
+}
+
+bool DlssZ::NvidiaFrameGenerationFilesPresent()
+{
+    std::error_code error;
+    return std::filesystem::exists(RuntimeDirectory() / L"nvngx_dlssg.dll", error) &&
+           std::filesystem::exists(RuntimeDirectory() / L"zluda" / L"ngx_fg" / L"nvngx.dll", error) &&
+           std::filesystem::exists(RuntimeDirectory() / L"zluda" / L"nvapi64.dll", error);
 }
 
 bool DlssZ::InstallCommandHooks(ID3D12Device* device, bool late)
@@ -218,8 +239,19 @@ bool DlssZ::IsDlssZ(const IFeature* feature)
     return dynamic_cast<const DLSSZFeatureDx12*>(feature) != nullptr;
 }
 
+namespace
+{
+thread_local int bypassDepth = 0;
+}
+
+DlssZ::LibraryBypass::LibraryBypass() { ++bypassDepth; }
+DlssZ::LibraryBypass::~LibraryBypass() { --bypassDepth; }
+
 bool DlssZ::BypassLibraryHooks()
 {
+    if (bypassDepth > 0)
+        return true;
+
     if (!_loaded)
         return false;
 

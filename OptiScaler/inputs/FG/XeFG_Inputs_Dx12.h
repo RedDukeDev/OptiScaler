@@ -1,5 +1,6 @@
 #pragma once
 #include "SysUtils.h"
+#include <atomic>
 #include <NVNGX_Parameter.h>
 #include <upscalers/IFeature_Dx12.h>
 #include <framegen/IFGFeature_Dx12.h>
@@ -40,6 +41,10 @@ class XeFGInputs
     inline static int _frameTimeSamples = 0;
     inline static bool _gameDepthMV[BUFFER_COUNT] {}; // Frames without them from the game use the upscaler's
     inline static bool _upscalerMVs = false;
+    // The game has tagged frame constants at least once: without them frames come from the upscaler
+    inline static std::atomic<bool> _gameConstants = false;
+    inline static std::atomic<bool> _gameResources = false; // depth or motion vectors tagged by the game
+    inline static std::atomic<ID3D12Resource*> _gameDepth = nullptr; // the last depth the game tagged, referenced
 
     // The Witcher 3 only writes velocity where objects move, alpha is 0 where only the camera moved. Those pixels get
     // the camera's motion from depth, the velocity waits for the frame's depth and both go through the shader.
@@ -71,6 +76,7 @@ class XeFGInputs
     static xefg_swapchain_result_t PassSetPresentId(xefg_swapchain_handle_t context, uint32_t presentId);
 
     // Other FG outputs
+    static void AnswerAsXeFGSwapChain();
     static int FrameIndex(IFGFeature_Dx12* fg, uint32_t presentId);
     static void UpdateReprojection(uint32_t presentId, const xefg_swapchain_frame_constant_data_t* data, int index);
     static bool FillVelocity(IFGFeature_Dx12* fg, ID3D12GraphicsCommandList* cmdList, int index);
@@ -168,4 +174,8 @@ class XeFGInputs
     // The FG output's swapchain stands in for libxess_fg's, Unreal's XeFG only tags frames when it answers as one
     static bool IsXeFGSwapChainIID(REFIID riid);
     static uint32_t MaxInterpolations() { return _passMax; }
+
+    // The game's depth, for upscalers it doesn't hand one to (Unreal's XeSS with high resolution motion vectors): the
+    // depth the game tags for XeFG is the same scene depth. Null until the game has tagged one.
+    static ID3D12Resource* GameDepth() { return _gameDepth.load(); }
 };

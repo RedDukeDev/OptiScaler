@@ -14,6 +14,7 @@ namespace {
 thread_local bool internal = false;
 std::mutex map_mutex, installation_mutex, error_mutex;
 std::string last_error;
+std::string last_boundary_failure;
 bool installed = false, signatures_attached = false;
 using Clock = std::chrono::steady_clock;
 bool profile_commands() { static const bool enabled = std::getenv("D4R_PROFILE_STAGES") != nullptr; return enabled; }
@@ -58,7 +59,15 @@ struct Recording {
     ResourceStates resource_states;
     unsigned active_queries = 0;
     bool render_pass = false, predication = false, indirect_state_unknown = false, closed = false;
-    explicit Recording(ID3D12GraphicsCommandList* list) : original(list) {}
+    // Which recording this is, and how many commands that are not barriers or markers it has had: two
+    // launches with the same pair have nothing recorded between them.
+    uint64_t id = 0, commands = 0;
+    // What made the indirect state unknown, for the error a refused split reports.
+    const char* unknown_reason = "";
+    explicit Recording(ID3D12GraphicsCommandList* list) : original(list) {
+        static std::atomic<uint64_t> next{1};
+        id = next++;
+    }
 };
 std::unordered_map<ID3D12GraphicsCommandList*, std::shared_ptr<Recording>> recordings;
 std::atomic<uint64_t> recording_generation{0};
@@ -128,11 +137,12 @@ struct Access {
     ID3D12GraphicsCommandList* self;
     bool sampled = false;
     Clock::time_point begin{}, acquired{}, driver{};
-    explicit Access(ID3D12GraphicsCommandList* list) : self(list) {
+    explicit Access(ID3D12GraphicsCommandList* list, bool counts = true) : self(list) {
         sampled = !internal && sample_hooks() && hook_sample.choose();
         if (sampled) begin = Clock::now();
         recording = get_recording(list);
         if (recording) lock = std::unique_lock<std::recursive_mutex>(recording->mutex);
+        if (recording && counts) ++recording->commands;
         if (sampled) acquired = Clock::now();
     }
     void driver_call() {
@@ -266,14 +276,14 @@ HRESULT STDMETHODCALLTYPE hook_Reset(ID3D12GraphicsCommandList* self, ID3D12Comm
 void STDMETHODCALLTYPE hook_ClearState(ID3D12GraphicsCommandList* self, ID3D12PipelineState* pipeline_state) {
     Access access(self);
     if (access.recording) {
-        access.recording->state.clear(); access.recording->indirect_state_unknown = false;
+        access.recording->state.clear(); access.recording->indirect_state_unknown = false; access.recording->unknown_reason = "";
         auto pipeline = retain(pipeline_state);
         access.recording->state.emplace_back([pipeline](ID3D12GraphicsCommandList* target) { original_ClearState(target, pipeline.Get()); });
     }
     original_ClearState(access.target(), pipeline_state);
 }
 void STDMETHODCALLTYPE hook_ResourceBarrier(ID3D12GraphicsCommandList* self, UINT barrier_count, const D3D12_RESOURCE_BARRIER* barriers) {
-    Access access(self);
+    Access access(self, false);
     if (access.recording) for (UINT i = 0; i < barrier_count; ++i)
         if (barriers[i].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION &&
             (barriers[i].Transition.Subresource == 0 || barriers[i].Transition.Subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)) {
@@ -285,7 +295,7 @@ void STDMETHODCALLTYPE hook_ResourceBarrier(ID3D12GraphicsCommandList* self, UIN
     original_ResourceBarrier(access.target(), barrier_count, barriers);
 }
 void STDMETHODCALLTYPE hook_Barrier(ID3D12GraphicsCommandList* self, UINT32 barrier_groups_count, const D3D12_BARRIER_GROUP* barrier_groups) {
-    Access access(self);
+    Access access(self, false);
     if (access.recording) for (UINT32 g = 0; g < barrier_groups_count; ++g) if (barrier_groups[g].Type == D3D12_BARRIER_TYPE_TEXTURE)
         for (UINT32 b = 0; b < barrier_groups[g].NumBarriers; ++b) {
             const auto& barrier = barrier_groups[g].pTextureBarriers[b]; const auto& range = barrier.Subresources;
@@ -301,12 +311,12 @@ void STDMETHODCALLTYPE hook_Barrier(ID3D12GraphicsCommandList* self, UINT32 barr
     original_Barrier(access.target(), barrier_groups_count, barrier_groups);
 }
 void STDMETHODCALLTYPE hook_BeginEvent(ID3D12GraphicsCommandList* self, UINT metadata, const void* data, UINT size) {
-    Access access(self);
+    Access access(self, false);
     if (access.recording) access.recording->events.push_back({metadata, copy_values(static_cast<const uint8_t*>(data), size)});
     original_BeginEvent(access.target(), metadata, data, size);
 }
 void STDMETHODCALLTYPE hook_EndEvent(ID3D12GraphicsCommandList* self) {
-    Access access(self);
+    Access access(self, false);
     if (access.recording && !access.recording->events.empty()) access.recording->events.pop_back();
     original_EndEvent(access.target());
 }
@@ -342,8 +352,8 @@ void STDMETHODCALLTYPE hook_ExecuteBundle(ID3D12GraphicsCommandList* self, ID3D1
     if (access.recording && bundle) {
         std::lock_guard<std::recursive_mutex> lock(bundle->mutex);
         access.recording->state.insert(access.recording->state.end(), bundle->state.begin(), bundle->state.end());
-        access.recording->indirect_state_unknown |= bundle->indirect_state_unknown;
-    } else if (access.recording) access.recording->indirect_state_unknown = true;
+        if (bundle->indirect_state_unknown) { access.recording->indirect_state_unknown = true; access.recording->unknown_reason = bundle->unknown_reason; }
+    } else if (access.recording) { access.recording->indirect_state_unknown = true; access.recording->unknown_reason = "ExecuteBundle of an untracked bundle"; }
     original_ExecuteBundle(access.target(), command_list);
 }
 void STDMETHODCALLTYPE hook_ExecuteIndirect(ID3D12GraphicsCommandList* self, ID3D12CommandSignature* command_signature,
@@ -354,12 +364,15 @@ void STDMETHODCALLTYPE hook_ExecuteIndirect(ID3D12GraphicsCommandList* self, ID3
         (void)command_signature->GetPrivateData(signature_description_tag, &bytes, nullptr);
         if (bytes < sizeof(UINT) || bytes > sizeof(UINT) + 4096 * sizeof(D3D12_INDIRECT_ARGUMENT_DESC)) {
             access.recording->indirect_state_unknown = true;
+            access.recording->unknown_reason = "ExecuteIndirect with a command signature made before it was tracked";
         } else {
             std::vector<uint8_t> description(bytes);
             UINT count = 0;
             const auto result = command_signature->GetPrivateData(signature_description_tag, &bytes, description.data());
             std::memcpy(&count, description.data(), sizeof(count));
-            if (FAILED(result) || count > 4096 || bytes != sizeof(UINT) + count * sizeof(D3D12_INDIRECT_ARGUMENT_DESC)) access.recording->indirect_state_unknown = true;
+            if (FAILED(result) || count > 4096 || bytes != sizeof(UINT) + count * sizeof(D3D12_INDIRECT_ARGUMENT_DESC)) {
+                access.recording->indirect_state_unknown = true; access.recording->unknown_reason = "ExecuteIndirect with a malformed signature description";
+            }
             else {
                 std::vector<D3D12_INDIRECT_ARGUMENT_DESC> arguments(count);
                 std::memcpy(arguments.data(), description.data() + sizeof(UINT), count * sizeof(D3D12_INDIRECT_ARGUMENT_DESC));
@@ -538,6 +551,7 @@ void STDMETHODCALLTYPE hook_execute(ID3D12CommandQueue* queue, UINT count, ID3D1
 InternalScope::InternalScope() : previous(internal) { internal = true; }
 InternalScope::~InternalScope() { internal = previous; }
 std::string error() { std::lock_guard<std::mutex> lock(error_mutex); return last_error; }
+std::string boundary_failure() { std::lock_guard<std::mutex> lock(error_mutex); return last_boundary_failure; }
 size_t live_recordings() { std::lock_guard<std::mutex> lock(map_mutex); return recordings.size(); }
 D3D12_RESOURCE_STATES resource_state(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES fallback) {
     const auto state = resource_access(list, resource, ResourceAccess(fallback));
@@ -629,15 +643,48 @@ void install(ID3D12Device* device) {
         attached.clear(); signatures_attached = false; throw;
     }
 }
+uint64_t command_mark(ID3D12GraphicsCommandList* list) {
+    auto recording = get_recording(list, false);
+    if (!recording) return 0;
+    std::lock_guard<std::recursive_mutex> lock(recording->mutex);
+    return (recording->id << 32) | (recording->commands & 0xffffffffull);
+}
+uint32_t resource_state_c(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, uint32_t fallback) noexcept {
+    try {
+        return uint32_t(resource_state(list, resource, D3D12_RESOURCE_STATES(fallback)));
+    } catch (...) {
+        return fallback;
+    }
+}
+bool record_boundary_c(ID3D12GraphicsCommandList* list, BoundaryC callback, void* user) noexcept {
+    try {
+        record_boundary(list, [callback, user](ID3D12CommandQueue* queue) { callback(user, queue); });
+        return true;
+    } catch (const std::exception& failure) {
+        // A refused split concerns this list only: unlike last_error it must not refuse every later split.
+        { std::lock_guard<std::mutex> lock(error_mutex); last_boundary_failure = failure.what(); }
+        std::fprintf(stderr, "D4R_BOUNDARY_FAILURE %s\n", failure.what());
+        return false;
+    }
+}
 void record_boundary(ID3D12GraphicsCommandList* list, Boundary callback) {
     const auto recordStart = Clock::now();
     if (!installed || !list || !callback) throw std::runtime_error("D3D12 command backend is not initialized");
     if (!error().empty()) throw std::runtime_error(error());
-    if (list->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) throw std::runtime_error("DLSS requires a direct command list");
+    // Streamline records its frame generation on a compute list: the suffix is of the type of the list it continues.
+    const auto listType = list->GetType();
+    if (listType != D3D12_COMMAND_LIST_TYPE_DIRECT && listType != D3D12_COMMAND_LIST_TYPE_COMPUTE)
+        throw std::runtime_error("DLSS requires a direct or compute command list");
     Access access(list);
     auto& recording = *access.recording;
-    if (recording.closed || recording.render_pass || recording.active_queries || recording.predication || recording.indirect_state_unknown)
-        throw std::runtime_error("Cannot split a closed list or an active render/query/predication/unknown indirect state scope");
+    if (recording.closed || recording.render_pass || recording.active_queries || recording.predication || recording.indirect_state_unknown) {
+        std::string why = "Cannot split a closed list or an active render/query/predication/unknown indirect state scope (";
+        why += recording.closed ? "closed " : ""; why += recording.render_pass ? "render-pass " : "";
+        why += recording.active_queries ? "query " : ""; why += recording.predication ? "predication " : "";
+        if (recording.indirect_state_unknown) { why += "indirect: "; why += recording.unknown_reason; }
+        why += ")";
+        throw std::runtime_error(why);
+    }
     // Construct/replay the suffix before modifying the original list so an
     // allocation failure leaves the caller's recording intact.
     InternalScope scope;
@@ -646,8 +693,8 @@ void record_boundary(ID3D12GraphicsCommandList* list, Boundary callback) {
     segment.allocator = recording.current_allocator; segment.boundary = std::move(callback);
     segment.resource_states = recording.resource_states;
     ComPtr<ID3D12CommandAllocator> nextAllocator; ComPtr<ID3D12GraphicsCommandList> next;
-    dx(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(nextAllocator.GetAddressOf())), "Suffix allocator");
-    dx(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, nextAllocator.Get(), nullptr, IID_PPV_ARGS(next.GetAddressOf())), "Suffix command list");
+    dx(device->CreateCommandAllocator(listType, IID_PPV_ARGS(nextAllocator.GetAddressOf())), "Suffix allocator");
+    dx(device->CreateCommandList(0, listType, nextAllocator.Get(), nullptr, IID_PPV_ARGS(next.GetAddressOf())), "Suffix command list");
     const auto replayStart = Clock::now();
     for (auto& state : recording.state) state(next.Get());
     const auto replayMs = milliseconds(replayStart);

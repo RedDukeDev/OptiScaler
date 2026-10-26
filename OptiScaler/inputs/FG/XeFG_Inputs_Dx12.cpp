@@ -1,5 +1,7 @@
 #include "pch.h"
+#include <atomic>
 #include "XeFG_Inputs_Dx12.h"
+#include "Upscaler_Inputs.h"
 #include <proxies/XeLL_Proxy.h>
 #include <detours/detours.h>
 
@@ -342,6 +344,40 @@ void XeFGInputs::SetGameMVFlags()
     _constants.flags.set(FG_Flags::DisplayResolutionMVs, flags & XEFG_SWAPCHAIN_INIT_FLAG_HIGH_RES_MV);
 }
 
+// Unreal's XeFG only tags frames when the swapchain it gets answers as libxess_fg's. OptiScaler's wrapped swapchain does,
+// the FG output's own (FidelityFX's) doesn't, so its QueryInterface answers for it too.
+static PVOID swapChainQueryInterface = nullptr;
+
+static HRESULT STDMETHODCALLTYPE HkSwapChainQueryInterface(IUnknown* self, REFIID riid, void** object)
+{
+    if (XeFGInputs::IsXeFGSwapChainIID(riid))
+    {
+        static bool said = false;
+        if (!std::exchange(said, true))
+            LOG_INFO("XeFG input: the swapchain answers as libxess_fg's");
+
+        self->AddRef();
+        *object = self;
+        return S_OK;
+    }
+
+    return ((decltype(&HkSwapChainQueryInterface)) swapChainQueryInterface)(self, riid, object);
+}
+
+void XeFGInputs::AnswerAsXeFGSwapChain()
+{
+    PVOID function = _swapChain == nullptr ? nullptr : (*(void***) _swapChain)[0];
+
+    if (function == nullptr || swapChainQueryInterface != nullptr || FromOptiScaler(function))
+        return;
+
+    swapChainQueryInterface = function;
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&swapChainQueryInterface, HkSwapChainQueryInterface);
+    LOG_INFO("XeFG input: swapchain QueryInterface hook {}", DetourTransactionCommit() == NO_ERROR);
+}
+
 xefg_swapchain_result_t XeFGInputs::InitFromSwapChain(xefg_swapchain_handle_t, ID3D12CommandQueue*,
                                                       const xefg_swapchain_d3d12_init_params_t* params)
 {
@@ -350,11 +386,14 @@ xefg_swapchain_result_t XeFGInputs::InitFromSwapChain(xefg_swapchain_handle_t, I
         return XEFG_SWAPCHAIN_RESULT_ERROR_UNINITIALIZED;
 
     _swapChain = params->pApplicationSwapChain;
+    AnswerAsXeFGSwapChain();
     _enabled = false;
     _frameTimeScale = 0.0f;
     _frameTimeMax = 0.0f;
     _frameTimeSamples = 0;
     _upscalerMVs = false;
+    _gameConstants = false;
+    _gameResources = false;
     std::fill(std::begin(_frameIds), std::end(_frameIds), 0);
     std::fill(std::begin(_gameDepthMV), std::end(_gameDepthMV), false);
     _cameraKnown = false;
@@ -417,6 +456,10 @@ xefg_swapchain_result_t XeFGInputs::SetEnabled(xefg_swapchain_handle_t, uint32_t
 
     _enabled = enable != 0;
 
+    // What the game asks of FG, for the default that follows it
+    State::Instance().dlssgInputGameEnabled = _enabled;
+    State::Instance().dlssgInputGameInterpolationCount = 1;
+
     // The game stops tagging frames once it disables FG, so the FG output has to stop now
     if (auto fg = State::Instance().currentFG; !_enabled && fg != nullptr && fg->IsActive())
     {
@@ -431,6 +474,7 @@ xefg_swapchain_result_t XeFGInputs::TagFrameConstants(xefg_swapchain_handle_t, u
                                                       const xefg_swapchain_frame_constant_data_t* data)
 {
     auto fg = State::Instance().currentFG;
+    _gameConstants = true;
 
     if (fg == nullptr || _swapChain == nullptr)
         return XEFG_SWAPCHAIN_RESULT_SUCCESS;
@@ -492,8 +536,7 @@ xefg_swapchain_result_t XeFGInputs::TagFrameConstants(xefg_swapchain_handle_t, u
     fg->EvaluateState(_device, _constants);
 
     // Follow the game's FG toggle, the FG output needs the camera to start
-    if (_enabled && cameraKnown && Config::Instance()->FGEnabled.value_or_default() && !fg->IsActive() &&
-        !fg->IsPaused())
+    if (_enabled && cameraKnown && Config::Instance()->IsFGEnabled() && !fg->IsActive() && !fg->IsPaused())
     {
         fg->Activate();
         fg->ResetCounters();
@@ -562,6 +605,16 @@ xefg_swapchain_result_t XeFGInputs::TagFrameResource(xefg_swapchain_handle_t, ID
     if (data->type == XEFG_SWAPCHAIN_RES_DEPTH || data->type == XEFG_SWAPCHAIN_RES_MOTION_VECTOR)
     {
         _gameDepthMV[index] = true;
+        _gameResources = true;
+
+        if (data->type == XEFG_SWAPCHAIN_RES_DEPTH && data->pResource != nullptr &&
+            data->pResource != _gameDepth.load())
+        {
+            data->pResource->AddRef();
+
+            if (auto previous = _gameDepth.exchange(data->pResource))
+                previous->Release();
+        }
 
         if (std::exchange(_upscalerMVs, false))
         {
@@ -612,7 +665,13 @@ xefg_swapchain_result_t XeFGInputs::GetLastPresentStatus(xefg_swapchain_handle_t
 {
     auto fg = State::Instance().currentFG;
     uint32_t active = fg != nullptr && fg->IsActive() && !fg->IsPaused();
-    *status = { active ? fg->GetInterpolatedFrameCount() + 1 : 1, XEFG_SWAPCHAIN_RESULT_SUCCESS, active };
+
+    // The game tags nothing while it is told that nothing is generated: say so while it wants FG, the tags are what
+    // start the output
+    if (_enabled && fg != nullptr)
+        active = 1;
+
+    *status = { active ? (fg != nullptr ? fg->GetInterpolatedFrameCount() + 1 : 2) : 1, XEFG_SWAPCHAIN_RESULT_SUCCESS, active };
     return XEFG_SWAPCHAIN_RESULT_SUCCESS;
 }
 
@@ -738,6 +797,17 @@ void XeFGInputs::SetUpscalerInputs(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX
         !_enabled)
         return;
 
+    // Once the game tags depth and motion vectors they are the game's, whatever the upscaler gets
+    if (_gameResources.load())
+        return;
+
+    // A game that tags no constants at all gets its frames from the upscaler, as the upscaler input does: a new frame
+    // for each upscale and the camera from the upscaler's parameters
+    const bool untagged = !_gameConstants.load();
+
+    if (untagged)
+        fg->StartNewFrame();
+
     // The game's frame constants for this frame come before the upscaler, so it's the latest frame
     auto index = fg->GetIndex();
 
@@ -747,6 +817,32 @@ void XeFGInputs::SetUpscalerInputs(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX
 
     if (!std::exchange(_upscalerMVs, true))
         LOG_INFO("XeFG input: game doesn't tag depth and motion vectors, using the upscaler's");
+
+    if (untagged)
+    {
+        auto camera = UpscalerInputs::GetCameraValues(*parameters, feature);
+        float jitterX = 0.0f, jitterY = 0.0f;
+        int reset = 0;
+        parameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitterX);
+        parameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitterY);
+        parameters->Get(NVSDK_NGX_Parameter_Reset, &reset);
+
+        fg->EvaluateState(_device, _constants);
+        fg->SetCameraValues(camera.cameraNear, camera.cameraFar, camera.cameraVFov,
+                            (float) feature->DisplayWidth() / (float) feature->DisplayHeight(), camera.meterFactor,
+                            index);
+        fg->SetJitter(jitterX, jitterY, index);
+        fg->SetReset(reset, index);
+        fg->SetFrameTimeDelta(State::Instance().lastFGFrameTime, index);
+        fg->SetInterpolationRect(feature->DisplayWidth(), feature->DisplayHeight(), index);
+
+        if (Config::Instance()->IsFGEnabled() && !fg->IsActive() && !fg->IsPaused())
+        {
+            LOG_INFO("XeFG input: activating the FG output from the upscaler's frames");
+            fg->Activate();
+            fg->ResetCounters();
+        }
+    }
 
     _constants.flags.set(FG_Flags::JitteredMVs, feature->JitteredMV());
     _constants.flags.set(FG_Flags::DisplayResolutionMVs, !feature->LowResMV());

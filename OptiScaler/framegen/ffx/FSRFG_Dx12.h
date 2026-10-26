@@ -36,6 +36,13 @@ class FSRFG_Dx12 : public virtual IFGFeature_Dx12
     ID3D12GraphicsCommandList* _fgCommandList[BUFFER_COUNT] {};
     ID3D12CommandAllocator* _fgCommandAllocator[BUFFER_COUNT] {};
 
+    // With NVIDIA's interpolation: the depth and motion vectors of a frame as the game left them, for the callback
+    // that comes when the frame is presented. Kept readable.
+    ID3D12Resource* _nvDepth[BUFFER_COUNT] {};
+    ID3D12Resource* _nvMotion[BUFFER_COUNT] {};
+    uint32_t _nvRenderWidth[BUFFER_COUNT] {};
+    uint32_t _nvRenderHeight[BUFFER_COUNT] {};
+
     static FfxApiResourceState GetFfxApiState(D3D12_RESOURCE_STATES state)
     {
         switch (state)
@@ -66,6 +73,8 @@ class FSRFG_Dx12 : public virtual IFGFeature_Dx12
     }
 
     bool ExecuteCommandList(int index);
+    bool NvidiaSnapshot(int index);
+    ffxReturnCode_t NvidiaDispatch(ffxDispatchDescFrameGeneration* params, int index);
     bool Dispatch();
     void ConfigureFramePaceTuning();
     bool HudlessFormatTransfer(int index, ID3D12Device* device, DXGI_FORMAT targetFormat, Dx12Resource* resource);

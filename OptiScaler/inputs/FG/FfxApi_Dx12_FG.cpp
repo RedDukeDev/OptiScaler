@@ -518,6 +518,10 @@ ffxReturnCode_t ffxConfigure_Dx12FG(ffxContext* context, ffxConfigureDescHeader*
 
         s.fsrfgInputActive = cDesc->frameGenerationEnabled;
 
+        // What the game asks of FG, for the default that follows it
+        s.dlssgInputGameEnabled = cDesc->frameGenerationEnabled;
+        s.dlssgInputGameInterpolationCount = 1;
+
         if (cDesc->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->IsFGEnabled())
         {
             if (!fg->IsPaused())

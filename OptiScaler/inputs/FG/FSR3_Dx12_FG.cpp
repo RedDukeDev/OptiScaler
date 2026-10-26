@@ -707,6 +707,10 @@ static Fsr3::FfxErrorCode hkffxFsr3ConfigureFrameGeneration(void* context, Fsr3:
 
         s.fsrfgInputActive = config->frameGenerationEnabled;
 
+        // What the game asks of FG, for the default that follows it
+        s.dlssgInputGameEnabled = config->frameGenerationEnabled;
+        s.dlssgInputGameInterpolationCount = 1;
+
         if (config->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->IsFGEnabled())
         {
             if (!fg->IsPaused())
@@ -790,6 +794,10 @@ static Fsr3::FfxErrorCode hkffxSetFrameGenerationConfigToSwapchainDX12(Fsr3::Ffx
         LOG_DEBUG("frameGenerationEnabled: {} ", config->frameGenerationEnabled);
 
         s.fsrfgInputActive = config->frameGenerationEnabled;
+
+        // What the game asks of FG, for the default that follows it
+        s.dlssgInputGameEnabled = config->frameGenerationEnabled;
+        s.dlssgInputGameInterpolationCount = 1;
 
         if (config->frameGenerationEnabled && !fg->IsActive() && Config::Instance()->IsFGEnabled())
         {

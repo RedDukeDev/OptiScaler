@@ -50,6 +50,11 @@ class DLSSZFeatureDx12 : public IFeature_Dx12
         std::atomic<int> failures = 0;
     };
 
+    // The runtime holds one upscaler per process. A game that changes the resolution or the quality creates the
+    // new feature before it releases the old one, so the feature creating takes the upscaler from this one.
+    static inline std::mutex _ownerMutex;
+    static inline std::weak_ptr<Link> _owner;
+
     // One frame, as the boundary will see it.
     struct Frame
     {
@@ -69,6 +74,10 @@ class DLSSZFeatureDx12 : public IFeature_Dx12
 
     bool _recreating = false;
     long _lastSkippedFrames = 0;
+
+    // A flat depth, for the frames a game has none to give (Unreal's XeSS in its menus, where nothing is tagged)
+    Microsoft::WRL::ComPtr<ID3D12Resource> _flatDepth;
+    ID3D12Resource* FlatDepth(ID3D12Resource* like);
 
     // Everything from the game's table that the boundary needs. False when a required input is missing.
     bool Gather(ID3D12GraphicsCommandList* commandList, NVSDK_NGX_Parameter* parameters, Frame& out);

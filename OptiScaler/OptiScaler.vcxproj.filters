@@ -1016,6 +1016,12 @@
     <ClInclude Include="framegen\nvngx\Nvngx_Nukems.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="framegen\nvngx\Nvngx_Nvidia.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\nvngx\NvInterpolator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="framegen\nvngx\Nvngx_DllProxy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1770,6 +1776,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="framegen\nvngx\Nvngx_Nukems.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\nvngx\Nvngx_Nvidia.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\nvngx\NvInterpolator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="framegen\nvngx\Nvngx_DllProxy.cpp">

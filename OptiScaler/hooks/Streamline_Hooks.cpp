@@ -334,7 +334,22 @@ sl::Result StreamlineHooks::hkslIsFeatureLoaded(sl::Feature feature, bool& loade
 sl::Result StreamlineHooks::hkslGetFeatureRequirements(sl::Feature feature, sl::FeatureRequirements& requirements)
 {
     if (feature == sl::kFeatureDLSS_G)
+    {
+        // A game reads the structure, not only the result: flags of zero say that no API is supported, and an engine
+        // that reads that leaves the feature off. The plugin fills it when it can; otherwise it is made up here for
+        // Direct3D 12, with no OS or driver requirements.
+        sl::Result original = sl::Result::eErrorFeatureMissing;
+        if (o_slGetFeatureRequirements != nullptr)
+            original = o_slGetFeatureRequirements(feature, requirements);
+
+        if (original != sl::Result::eOk)
+        {
+            requirements.flags = sl::FeatureRequirementFlags::eD3D12Supported;
+            requirements.maxNumViewports = 1;
+        }
+
         return sl::Result::eOk;
+    }
 
     return o_slGetFeatureRequirements(feature, requirements);
 }
@@ -1384,6 +1399,11 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     state.dlssgLastSetMode = newOptions.mode;
 
+    // The frames are made by OptiScaler's output, with NVIDIA's library: the game's own DLSS-G would run that library
+    // too, a second time, on the same frames
+    if (state.fgNvidiaInterpolation)
+        newOptions.mode = sl::DLSSGMode::eOff;
+
     return o_slDLSSGSetOptions(viewport, newOptions);
 }
 
@@ -1547,6 +1567,25 @@ sl::Result StreamlineHooks::hkslReflexSetOptions(const sl::ReflexOptions& option
     return o_slReflexSetOptions(newOptions);
 }
 
+sl::Result StreamlineHooks::hkslReflexGetState(sl::ReflexState& state)
+{
+    if (o_slReflexGetState == nullptr)
+        return sl::Result::eErrorFeatureMissing;
+
+    const auto result = o_slReflexGetState(state);
+
+    // A game that has DLSS-G on offer wants Reflex available (frame generation is not allowed without it) and an engine
+    // reads that here. Where the GPU is not NVIDIA's the plugin has no driver to ask, and says no: OptiScaler stands in
+    // for Reflex there (fakenvapi), so the answer is yes.
+    const bool frameGeneration = State::Instance().activeFgInput == FGInput::NvngxFG ||
+                                 State::Instance().activeFgInput == FGInput::DLSSG;
+    const bool wasAvailable = state.lowLatencyAvailable;
+    if (frameGeneration && !wasAvailable && result == sl::Result::eOk)
+        state.lowLatencyAvailable = true;
+
+    return result;
+}
+
 sl::Result StreamlineHooks::hkslReflexSleep(const sl::FrameToken& frame)
 {
     if (o_slReflexSleep == nullptr)
@@ -1702,6 +1741,12 @@ void* StreamlineHooks::hkreflex_slGetPluginFunction(PFN_slGetPluginFunction orig
     {
         o_slReflexSetOptions = (decltype(&slReflexSetOptions)) original(functionName);
         return &hkslReflexSetOptions;
+    }
+
+    if (strcmp(functionName, "slReflexGetState") == 0)
+    {
+        o_slReflexGetState = (decltype(&slReflexGetState)) original(functionName);
+        return &hkslReflexGetState;
     }
 
     if (strcmp(functionName, "slReflexSleep") == 0)
@@ -2394,6 +2439,7 @@ void StreamlineHooks::clearPluginPointersInRange(uintptr_t base, size_t size)
     clear(o_reflex_slSetConstants_sl1, "o_reflex_slSetConstants_sl1");
     clear(o_slReflexSetOptions, "o_slReflexSetOptions");
     clear(o_slReflexSleep, "o_slReflexSleep");
+    clear(o_slReflexGetState, "o_slReflexGetState");
 
     clear(o_pcl_slOnPluginLoad, "o_pcl_slOnPluginLoad");
     clear(o_slPCLSetMarker, "o_slPCLSetMarker");

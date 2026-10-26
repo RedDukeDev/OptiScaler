@@ -94,10 +94,26 @@ void RuntimeLog(void*, int level, const char* message)
     }
 }
 
-// M: the Swin model of DLSS 4.5, whose heavy layers run natively on this GPU (5.7 ms for 960x540 to
-// 1920x1080, against 20 to 30 translated). It is what a game gets when it names no preset. A game that
-// asks for one (J, K, ...) gets that one, as on NVIDIA.
-constexpr int kDefaultPreset = 13;
+// What a game gets when it names no preset is what NVIDIA's own DLSS gives it: K (the first transformer) for DLAA,
+// Quality and Balanced, M (DLSS 4.5's second one) for Performance, L for Ultra Performance. Measured here at each
+// mode's own resolution to 2560x1440 (ms a frame): K 6.2 to 5.7 and M 26.8 to 5.4 at DLAA down to Ultra Performance,
+// L 91 to 10: M costs as many pixels as it is given, so it is for the modes that render few.
+constexpr int kPresetK = 11, kPresetL = 12, kPresetM = 13;
+// What "Latest" means in the menu: the newest model there is.
+constexpr int kDefaultPreset = kPresetM;
+
+int DefaultPresetFor(int quality)
+{
+    switch (quality)
+    {
+    case NVSDK_NGX_PerfQuality_Value_MaxPerf:
+        return kPresetM;
+    case NVSDK_NGX_PerfQuality_Value_UltraPerformance:
+        return kPresetL;
+    default:
+        return kPresetK;
+    }
+}
 
 // The preset a game asked for at this quality (NVIDIA's perf/quality value), 0 when it did not.
 int RequestedPreset(NVSDK_NGX_Parameter* parameters, int quality)
@@ -132,14 +148,69 @@ int RequestedPreset(NVSDK_NGX_Parameter* parameters, int quality)
     return (int) preset;
 }
 
-// The render preset for this quality: the configured one, else the game's hint, else M.
+// What the menu's "Render Presets Override" asks for at this quality: the one for all, else the one of this quality.
+std::optional<uint32_t> MenuPreset(int quality)
+{
+    auto& config = *Config::Instance();
+    if (!config.RenderPresetOverride.value_or_default())
+        return std::nullopt;
+
+    if (config.RenderPresetForAll.has_value())
+        return config.RenderPresetForAll.value();
+
+    const CustomOptional<uint32_t>* perQuality = nullptr;
+    switch (quality)
+    {
+    case NVSDK_NGX_PerfQuality_Value_MaxPerf:
+        perQuality = &config.RenderPresetPerformance;
+        break;
+    case NVSDK_NGX_PerfQuality_Value_Balanced:
+        perQuality = &config.RenderPresetBalanced;
+        break;
+    case NVSDK_NGX_PerfQuality_Value_MaxQuality:
+        perQuality = &config.RenderPresetQuality;
+        break;
+    case NVSDK_NGX_PerfQuality_Value_UltraPerformance:
+        perQuality = &config.RenderPresetUltraPerformance;
+        break;
+    case NVSDK_NGX_PerfQuality_Value_UltraQuality:
+        perQuality = &config.RenderPresetUltraQuality;
+        break;
+    case NVSDK_NGX_PerfQuality_Value_DLAA:
+        perQuality = &config.RenderPresetDLAA;
+        break;
+    default:
+        return std::nullopt;
+    }
+
+    if (perQuality->has_value())
+        return perQuality->value();
+
+    return std::nullopt;
+}
+
+// A preset number the library can be asked for: 1 (A) to 15 (O). The menu's "Latest" is M, the newest model here;
+// 0 (the game's own, "Default") and anything else mean no choice.
+int Valid(uint32_t preset)
+{
+    if (preset == NV_PRESET_LATEST)
+        return kDefaultPreset;
+
+    return preset >= 1 && preset <= 15 ? (int) preset : 0;
+}
+
+// The render preset for this quality, in this order: the menu's, the configuration file's, the game's hint, NVIDIA's default.
 int PresetFor(NVSDK_NGX_Parameter* parameters, int quality)
 {
+    if (const auto chosen = MenuPreset(quality); chosen.has_value())
+        if (const int preset = Valid(*chosen); preset != 0)
+            return preset;
+
     if (Config::Instance()->ZludaDlssPreset.has_value())
         return Config::Instance()->ZludaDlssPreset.value();
 
-    const int requested = RequestedPreset(parameters, quality);
-    return requested == 0 ? kDefaultPreset : requested;
+    const int requested = Valid((unsigned int) RequestedPreset(parameters, quality));
+    return requested == 0 ? DefaultPresetFor(quality) : requested;
 }
 
 } // namespace
@@ -213,9 +284,12 @@ bool DLSSZFeatureDx12::InitInternal(ID3D12GraphicsCommandList* commandList, NVSD
                  (JitteredMV() ? DLSS5NR_UPSCALER_MOTION_JITTERED : 0) |
                  (DepthInverted() ? DLSS5NR_UPSCALER_DEPTH_INVERTED : 0) |
                  (AutoExposure() ? DLSS5NR_UPSCALER_AUTO_EXPOSURE : 0);
-    info.quality = (int) PerfQualityValue();
+    // The library refuses Ultra Quality (0xBAD00010, an unsupported parameter) where it takes every other mode. The
+    // sizes are the game's, so the nearest mode it has gives the same picture; the game's own mode still picks the preset.
+    const int asked = (int) PerfQualityValue();
+    info.quality = asked == NVSDK_NGX_PerfQuality_Value_UltraQuality ? (int) NVSDK_NGX_PerfQuality_Value_MaxQuality : asked;
     // Ray reconstruction has presets of its own, which the game names differently: left to the library.
-    info.preset = _rayReconstruction ? 0 : PresetFor(parameters, info.quality);
+    info.preset = _rayReconstruction ? 0 : PresetFor(parameters, asked);
 
     LOG_INFO("DLSS on AMD: creating {} for {}x{} to {}x{}, quality {}, preset {}",
              _rayReconstruction ? "ray reconstruction" : "super resolution", info.render_width, info.render_height,
@@ -224,6 +298,21 @@ bool DLSSZFeatureDx12::InitInternal(ID3D12GraphicsCommandList* commandList, NVSD
     const double began = Util::MillisecondsNow();
     dlss5nr_upscaler* upscaler = nullptr;
     int result;
+
+    {
+        std::lock_guard<std::mutex> ownerGuard(_ownerMutex);
+        if (auto previous = _owner.lock(); previous && previous != _link)
+        {
+            std::lock_guard<std::mutex> guard(previous->lock);
+            if (previous->upscaler != nullptr)
+            {
+                LOG_INFO("DLSS on AMD: the upscaler of the previous feature is released for this one");
+                DlssZ::Functions().destroy(previous->upscaler);
+                previous->upscaler = nullptr;
+            }
+        }
+    }
+
     {
         ScopedSkipHeapCapture skipHeapCapture {};
         ScopedSkipSpoofingGlobal skipSpoofing {};
@@ -239,6 +328,11 @@ bool DLSSZFeatureDx12::InitInternal(ID3D12GraphicsCommandList* commandList, NVSD
     {
         std::lock_guard<std::mutex> guard(_link->lock);
         _link->upscaler = upscaler;
+    }
+
+    {
+        std::lock_guard<std::mutex> ownerGuard(_ownerMutex);
+        _owner = _link;
     }
 
     dlss5nr_upscaler_status status {};
@@ -260,6 +354,46 @@ void DLSSZFeatureDx12::FallBack(const char* reason)
     State::Instance().changeBackend[Handle()->Id] = true;
 }
 
+// Zeroes, as every new committed resource is: one plane at the same distance everywhere. The network works without
+// depth detail, the picture is not as good as with the game's.
+ID3D12Resource* DLSSZFeatureDx12::FlatDepth(ID3D12Resource* like)
+{
+    const auto size = like->GetDesc();
+
+    if (_flatDepth != nullptr)
+    {
+        const auto have = _flatDepth->GetDesc();
+        if (have.Width == size.Width && have.Height == size.Height)
+            return _flatDepth.Get();
+
+        _flatDepth.Reset();
+    }
+
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    if (FAILED(like->GetDevice(IID_PPV_ARGS(&device))))
+        return nullptr;
+
+    D3D12_HEAP_PROPERTIES heap {};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_RESOURCE_DESC desc {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = size.Width;
+    desc.Height = size.Height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R32_FLOAT;
+    desc.SampleDesc.Count = 1;
+
+    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                                               IID_PPV_ARGS(&_flatDepth))))
+        return nullptr;
+
+    LOG_INFO("DLSS on AMD: the game gives no depth, a flat one of {}x{} stands in", (unsigned) size.Width, size.Height);
+    return _flatDepth.Get();
+}
+
 bool DLSSZFeatureDx12::Gather(ID3D12GraphicsCommandList* list, NVSDK_NGX_Parameter* parameters, Frame& out)
 {
     auto& config = *Config::Instance();
@@ -274,6 +408,9 @@ bool DLSSZFeatureDx12::Gather(ID3D12GraphicsCommandList* list, NVSDK_NGX_Paramet
     auto motion = GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_MotionVectors);
     auto depth = GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_Depth);
     auto output = GetParameter<ID3D12Resource*>(parameters, NVSDK_NGX_Parameter_Output);
+
+    if (depth == nullptr && color != nullptr)
+        depth = FlatDepth(color);
 
     if (color == nullptr || motion == nullptr || depth == nullptr || output == nullptr)
     {

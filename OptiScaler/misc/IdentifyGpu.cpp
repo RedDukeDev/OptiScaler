@@ -8,6 +8,7 @@
 #include <proxies/D3d12_Proxy.h>
 #include "nvapi/NvApiTypes.h"
 #include <hooks/Amdxc64_Hooks.h>
+#include <zluda/DlssZ.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -201,6 +202,21 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
                     State::Instance().activeFgNvngx = FGNvngxReplacement::None;
             }
         }
+    }
+
+    // NVIDIA's frame generation on an AMD GPU, for a game that has DLSS-G of its own: offered unless the configuration
+    // says anything about FG, where the choice stays the user's.
+    if (!localCachedInfo.empty() && localCachedInfo.front().vendorId != VendorId::Nvidia &&
+        !localCachedInfo.front().dlssCapable && !Config::Instance()->FGInput.has_value() &&
+        !Config::Instance()->FGOutput.has_value() && !Config::Instance()->FGNvngxReplacement.has_value() &&
+        DlssZ::NvidiaFrameGenerationFilesPresent())
+    {
+        Config::Instance()->FGInput.set_volatile_value(FGInput::NvngxFG);
+        Config::Instance()->FGNvngxReplacement.set_volatile_value(FGNvngxReplacement::Nvidia);
+        State::Instance().activeFgInput = FGInput::NvngxFG;
+        State::Instance().activeFgOutput = FGOutput::NoFG;
+        State::Instance().activeFgNvngx = FGNvngxReplacement::Nvidia;
+        LOG_INFO("NVIDIA frame generation is available on this GPU: the game's DLSS-G is served by it");
     }
 
     return localCachedInfo;

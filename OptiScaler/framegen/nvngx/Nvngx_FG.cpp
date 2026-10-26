@@ -11,6 +11,7 @@
 #include "Nvngx_Arturs.h"
 #include "Nvngx_FFX.h"
 #include "Nvngx_Combo.h"
+#include "Nvngx_Nvidia.h"
 #include <imgui/ImGuiNotify.hpp>
 #include <nvsdk_ngx_vk.h>
 
@@ -37,6 +38,10 @@ IFGNvngx* Nvngx_FG::getProvider()
 
     case FGNvngxReplacement::Combo:
         _provider = std::make_unique<Nvngx_Combo>();
+        break;
+
+    case FGNvngxReplacement::Nvidia:
+        _provider = std::make_unique<Nvngx_Nvidia>();
         break;
 
     case FGNvngxReplacement::None:
@@ -66,6 +71,8 @@ IFGNvngx* Nvngx_FG::getProvider()
                 return "Nukems";
             case FGNvngxReplacement::Combo:
                 return "Combo";
+            case FGNvngxReplacement::Nvidia:
+                return "NVIDIA";
             case FGNvngxReplacement::None:
             default:
                 return "???";

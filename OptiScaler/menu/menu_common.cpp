@@ -2398,6 +2398,10 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
             {
                 fgText = formatFg("Combo", Nvngx_FG::getMaxFakeFramesCount());
             }
+            else if (activeNvngxFg == FGNvngxReplacement::Nvidia)
+            {
+                fgText = formatFg("NVIDIA", Nvngx_FG::getMaxFakeFramesCount());
+            }
             else if (state.activeFgOutput == FGOutput::DLSSG && fg)
             {
                 fgText = formatFg("DLSSG", fg->GetMaxInterpolationCount());
@@ -3684,8 +3688,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     // DLSSG output requirements
     auto constexpr dlssgOutputIndex = (uint32_t) FGOutput::DLSSG;
     const bool maySupportDlssg = primaryGpu.vendorId == VendorId::Nvidia;
-    const bool hasDlssgReplacement =
-        state.nukemsFgFileAvailable || state.artursFgFileAvailable || FfxApiProxy::IsFGReady(false);
+    const bool hasDlssgReplacement = state.nukemsFgFileAvailable || state.artursFgFileAvailable ||
+                                     FfxApiProxy::IsFGReady(false) || DlssZ::NvidiaFrameGenerationUsable();
 
     if (!maySupportDlssg && hasDlssgReplacement)
     {
@@ -3750,6 +3754,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
                                                       "FFX used for the middle fake frame, Enabler for the rest\n\n"
                                                       "2x - FFX\n3x - Enabler\n4x - FFX + Enabler\n5x - Enabler\n6x - FFX + Enabler\n\n"
                                                       "Due to pacing, only odd number of fake frames are able to use FFX"},
+        { FGNvngxReplacement::Nvidia, "NVIDIA DLSS-G", "NVIDIA's own frame generation, run on this GPU through the dlss5nr runtime\n\n"
+                                                       "For AMD GPUs; needs nvngx_dlssg.dll in the dlss5nr folder"},
     };
 
     // clang-format on
@@ -3787,6 +3793,11 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     nvngxOptions[fgNvngxFfxIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
     nvngxOptions[fgNvngxFfxIndex].set_disabled(!FfxApiProxy::IsFGReady(false),
                                                "Missing amd_fidelityfx_framegeneration_dx12.dll");
+
+    auto constexpr fgNvngxNvidiaIndex = (uint32_t) FGNvngxReplacement::Nvidia;
+    nvngxOptions[fgNvngxNvidiaIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
+    nvngxOptions[fgNvngxNvidiaIndex].set_disabled(!DlssZ::NvidiaFrameGenerationUsable(),
+                                                  "Needs an AMD GPU and nvngx_dlssg.dll in the dlss5nr folder");
 
     auto constexpr fgNvngxComboIndex = (uint32_t) FGNvngxReplacement::Combo;
     nvngxOptions[fgNvngxComboIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
@@ -3855,6 +3866,10 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
                                     state.activeFgNvngx != config->FGNvngxReplacement.value_or_default();
         // XeFG input to XeFG output runs without OptiScaler's FG output
         auto configFgOutput = config->FGOutput.value_or_default();
+
+        // The DLSSG output that runs on the FSR-FG output without Streamline
+        if (state.fgNvidiaInterpolation && configFgOutput == FGOutput::DLSSG)
+            configFgOutput = FGOutput::FSRFG;
 
         if (config->FGInput.value_or_default() == FGInput::XeFG && configFgOutput == FGOutput::XeFG)
             configFgOutput = FGOutput::NoFG;
@@ -9208,6 +9223,7 @@ void MenuCommon::RenderMainMenuTabs(RenderMenuContext& ctx)
             const char* nvngxName = activeNvngxFg == FGNvngxReplacement::Nukems   ? "Nukems"
                                     : activeNvngxFg == FGNvngxReplacement::Arturs ? "Enabler"
                                     : activeNvngxFg == FGNvngxReplacement::FFX    ? "FFX"
+                                    : activeNvngxFg == FGNvngxReplacement::Nvidia ? "NVIDIA"
                                                                                   : "Combo";
             const int detectedCount = state.dlssgDetectedInterpolationCount;
 

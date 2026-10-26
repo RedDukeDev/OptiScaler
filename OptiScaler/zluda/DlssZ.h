@@ -56,6 +56,22 @@ bool WantsEarlyHooks();
 // cannot be split, so an upscaler leaves out the first few frames after (see HooksAreSettled).
 bool InstallCommandHooks(ID3D12Device* device, bool late);
 
+// Whether NVIDIA's frame generation can be offered: the GPU is not NVIDIA's, and the library and the NGX host
+// that drives it are there.
+bool NvidiaFrameGenerationUsable();
+
+// Only whether its files are there: what the GPU enumeration itself may ask, which NvidiaFrameGenerationUsable (it
+// asks that enumeration for the GPU) may not.
+bool NvidiaFrameGenerationFilesPresent();
+
+// While one is alive, the library loads made on this thread reach the real files, not the stand-ins the hooks give:
+// NVIDIA's frame generation asks for nvapi64.dll by name, and what it must get is ours.
+struct LibraryBypass
+{
+    LibraryBypass();
+    ~LibraryBypass();
+};
+
 // Tags the command signatures as they are made, whenever DLSS on AMD could be picked later (menu included): a
 // list that ran ExecuteIndirect through an untagged signature cannot be split.
 void TrackCommandSignatures(ID3D12Device* device);

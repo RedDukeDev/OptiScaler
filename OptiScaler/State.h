@@ -82,6 +82,7 @@ enum class FGNvngxReplacement : uint32_t
     Arturs,
     FFX,
     Combo,
+    Nvidia,
 };
 
 enum class WorkingMode : uint32_t
@@ -213,6 +214,9 @@ class State
     // OptiFG
     bool fgPresentIsCalled = false;
     bool fgOnlyGenerated = false;
+    // The FSR-FG output, with the frames made by NVIDIA's frame generation (FGOutput DLSSG, Nvidia replacement, and no
+    // Streamline to drive it)
+    bool fgNvidiaInterpolation = false;
     bool fgHudlessCompare = false;
     bool fgChanged = false;
     bool scChanged = false;
@@ -299,6 +303,7 @@ class State
 
     // What the game requested from DLSSG when it's used as FG Input
     // This might need to get moved to Sl_Inputs
+    // What the game asks of frame generation, from whichever input tells it (Streamline, or FSR FG)
     bool dlssgInputGameEnabled = false;
     int dlssgInputGameInterpolationCount = 1;
 

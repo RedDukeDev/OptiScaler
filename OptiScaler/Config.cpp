@@ -88,6 +88,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                     FGNvngxReplacement.set_from_config(FGNvngxReplacement::FFX);
                 else if (lstrcmpiA(FGNvngxReplacementString.value().c_str(), "combo") == 0)
                     FGNvngxReplacement.set_from_config(FGNvngxReplacement::Combo);
+                else if (lstrcmpiA(FGNvngxReplacementString.value().c_str(), "nvidia") == 0)
+                    FGNvngxReplacement.set_from_config(FGNvngxReplacement::Nvidia);
             }
 
             if (auto forceXell = readBool("fakenvapi", "ForceXeLL"); forceXell.has_value() && forceXell.value())
@@ -990,6 +992,8 @@ bool Config::SaveIni()
                 FGNvngxReplacementString = "FFX";
             else if (FGNvngxReplacementHeld.value() == FGNvngxReplacement::Combo)
                 FGNvngxReplacementString = "Combo";
+            else if (FGNvngxReplacementHeld.value() == FGNvngxReplacement::Nvidia)
+                FGNvngxReplacementString = "Nvidia";
         }
         ini.SetValue("FrameGen", "FGNvngxReplacement", FGNvngxReplacementString.c_str());
 
@@ -1812,6 +1816,12 @@ bool Config::FGCanFollowGame()
 {
     // SL1 has no slDLSSGSetOptions so we never learn what the game wants
     const auto& state = State::Instance();
+
+    // The FSR inputs are told by the game's own configuration of its frame generation
+    if (state.activeFgInput == FGInput::FSRFG || state.activeFgInput == FGInput::FSRFG30 ||
+        state.activeFgInput == FGInput::XeFG)
+        return true;
+
     return state.activeFgInput == FGInput::DLSSG && state.streamlineVersion.major >= 2;
 }
 
