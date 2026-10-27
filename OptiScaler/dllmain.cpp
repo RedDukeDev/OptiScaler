@@ -30,8 +30,7 @@
 #include "inputs/FG/FSR3_Dx12_FG.h"
 #include "inputs/FG/XeFG_Inputs_Dx12.h"
 
-#include <fsr4/FSR4ModelSelection.h>
-
+#include <hooks/Amdxc64_Hooks.h>
 #include <hooks/Dxgi_Hooks.h>
 #include <hooks/D3D11_Hooks.h>
 #include <hooks/D3D12_Hooks.h>
@@ -135,7 +134,7 @@ uint32_t CheckAgilitySDK(HMODULE exe)
     auto version = reinterpret_cast<const uint32_t*>(GetProcAddress(exe, "D3D12SDKVersion"));
     auto path = reinterpret_cast<const char* const*>(GetProcAddress(exe, "D3D12SDKPath"));
 
-    LOG_INFO();
+    LOG_INFO(" ");
 
     if (version && path)
     {
@@ -233,13 +232,10 @@ static void RunAgilityUpgrade(HMODULE dx12Module)
 }
 
 // Remembers the plugin for the menu
-static void RegisterLoadedAsi(const std::filesystem::path& path, bool hasPatchResult)
+static void RegisterLoadedAsi(const std::filesystem::path& path)
 {
     std::string name = wstring_to_string(path.filename().wstring()); // .string() can crash
-    std::string lowerName(name);
-    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    const bool isOptiPatcher = hasPatchResult || lowerName.find("optipatcher") != std::string::npos;
+    std::string version = Util::GetFileVersionString(path.wstring());
     auto& state = State::Instance();
     std::lock_guard<std::mutex> lock(state.loadedAsiPluginsMutex);
     // Late-load entries can be handled more than once
@@ -248,7 +244,7 @@ static void RegisterLoadedAsi(const std::filesystem::path& path, bool hasPatchRe
         if (plugin.name == name)
             return;
     }
-    state.loadedAsiPlugins.push_back({ name, isOptiPatcher });
+    state.loadedAsiPlugins.push_back({ name, version });
 }
 
 void LoadAsiPlugins()
@@ -290,7 +286,7 @@ void LoadAsiPlugins()
                 auto init = (PFN_InitializeASI) KernelBaseProxy::GetProcAddress_()(hMod, "InitializeASI");
                 auto patchResult = (PFN_PatchResult) KernelBaseProxy::GetProcAddress_()(hMod, "PatchResult");
 
-                RegisterLoadedAsi(entry.path(), patchResult != nullptr);
+                RegisterLoadedAsi(entry.path());
 
                 if (init != nullptr)
                     init();
@@ -353,7 +349,7 @@ void LoadAsiPlugins()
                                     auto patchResult =
                                         (PFN_PatchResult) KernelBaseProxy::GetProcAddress_()(hMod, "PatchResult");
 
-                                    RegisterLoadedAsi(entry.path(), patchResult != nullptr);
+                                    RegisterLoadedAsi(entry.path());
 
                                     if (init != nullptr)
                                         init();
@@ -1161,7 +1157,7 @@ static void CheckWorkingMode()
     }
 
     auto gameAgilityVersion = CheckAgilitySDK(exeModule);
-    if (State::Instance().isWindows10 && !State::Instance().isRunningOnLinux && 
+    if (State::Instance().isWindows10 && !State::Instance().isRunningOnLinux &&
         !Config::Instance()->FsrAgilitySDKUpgrade.has_value())
     {
         if (gameAgilityVersion < customD3D12SDKVersion)
@@ -1283,6 +1279,9 @@ static void printQuirks(flag_set<GameQuirk>& quirks)
 
     if (quirks & GameQuirk::XeFGCameraMotionFill)
         stringQuirks.push_back("Fill XeFG input motion vectors with camera motion");
+
+    if (quirks & GameQuirk::DLSSGFrameLatencyWaitable)
+        stringQuirks.push_back("Request frame latency waitable swapchain for DLSSG");
 
     state->detectedQuirks.append_range(stringQuirks);
     for (auto& stringQuirk : stringQuirks)
@@ -1484,8 +1483,6 @@ void CheckMemoryForProxies()
     XeLLProxy::InitXeLL();
     XeFGInputs::Hook(gameXeFG);
 
-    XellHooks::Hook();
-
     NVNGXProxy::InitNVNGX();
 }
 
@@ -1500,7 +1497,7 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
     if (primaryGpu.vendorId == VendorId::AMD)
         Amdxc64Hooks::Init();
 
-    else if (Config::Instance()->Fsr4ForceModel.value_or_default() == FSR4Support::INT8)
+    else if (IsFsr4Int8(Config::Instance()->Fsr4GpuSupport.value_or_default()))
     {
         // We need spoofing hooks for FFX but want to avoid spoofing for the rest of the game
         if (!Config::Instance()->DxgiSpoofing.value_or_default())
@@ -1531,6 +1528,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         HMODULE handle = nullptr;
         OSVERSIONINFOW winVer { 0 };
+
+        State::Instance().startTime = std::chrono::steady_clock::now();
 
         dllModule = hModule;
         exeModule = GetModuleHandle(nullptr);
@@ -1817,38 +1816,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         // FSR4 Watermark, overrides environment variable only if set in config
+        // The driver only checks whether the variable exists so disabling has to remove it
         if (Config::Instance()->Fsr4EnableWatermark.has_value())
         {
-            if (Config::Instance()->Fsr4EnableWatermark.value())
-            {
-                _wputenv_s(L"MLSR-WATERMARK", L"1");
-                SetEnvironmentVariableW(L"MLSR-WATERMARK", L"1");
+            Util::SetFlagEnvVar(L"MLSR-WATERMARK", Config::Instance()->Fsr4EnableWatermark.value());
 
-                if (!Config::Instance()->FpsOverlayPosition.has_value())
-                    Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
-            }
-            else
-            {
-                _wputenv_s(L"MLSR-WATERMARK", L"0");
-                SetEnvironmentVariableW(L"MLSR-WATERMARK", L"0");
-            }
+            if (Config::Instance()->Fsr4EnableWatermark.value() && !Config::Instance()->FpsOverlayPosition.has_value())
+                Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
         }
 
         if (Config::Instance()->FSRFGEnableWatermark.has_value())
         {
-            if (Config::Instance()->FSRFGEnableWatermark.value())
-            {
-                _wputenv_s(L"MLFI-WATERMARK", L"1");
-                SetEnvironmentVariableW(L"MLFI-WATERMARK", L"1");
+            Util::SetFlagEnvVar(L"MLFI-WATERMARK", Config::Instance()->FSRFGEnableWatermark.value());
 
-                if (!Config::Instance()->FpsOverlayPosition.has_value())
-                    Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
-            }
-            else
-            {
-                _wputenv_s(L"MLFI-WATERMARK", L"0");
-                SetEnvironmentVariableW(L"MLFI-WATERMARK", L"0");
-            }
+            if (Config::Instance()->FSRFGEnableWatermark.value() && !Config::Instance()->FpsOverlayPosition.has_value())
+                Config::Instance()->FpsOverlayPosition.set_volatile_value(FpsOverlayPos_TopRight);
         }
 
         // Asi plugins

@@ -14,19 +14,17 @@
 #include <menu/menu_overlay_dx.h>
 
 #include <misc/FrameLimit.h>
+#include <misc/DeferredRelease.h>
 
 #include <d3d11.h>
 #include <d3d12.h>
 #include <misc/IdentifyGpu.h>
-#include <hooks/Xell_Hooks.h>
 #include <low_latency/input/input_common.h>
 #include <inputs/FG/XeFG_Inputs_Dx12.h>
 
 #include <magic_enum.hpp>
 
-#ifdef LOW_LATENCY_INPUTS
 #include <low_latency/input/input_antilag2.h>
-#endif
 
 #ifdef DXGI_DEBUG_ENABLED
 #include <magic_enum.hpp>
@@ -394,7 +392,6 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     else
         ReflexHooks::update(false, false);
 
-    XellHooks::update();
     InputCommon::update();
 
     // Upscaler GPU time computation
@@ -484,10 +481,8 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         LOG_DEBUG("Final SyncInterval: {}", SyncInterval);
     }
 
-#ifdef LOW_LATENCY_INPUTS
     ID3D12CommandQueue* fgPresentQueue = nullptr;
     uint32_t fgFrameMultiplier = 1;
-#endif
 
     if (willPresent)
     {
@@ -495,7 +490,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         if (auto currentFeature = State::Instance().currentFeature; currentFeature != nullptr)
         {
             if (auto currentFg = State::Instance().currentFG; currentFg != nullptr)
-                currentFeature->TickFrozenCheck(currentFg->GetInterpolatedFrameCount());
+                currentFeature->TickFrozenCheck(std::max(currentFg->GetInterpolatedFrameCount(), 1u));
             else
                 currentFeature->TickFrozenCheck();
         }
@@ -503,7 +498,6 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         // Draw overlay
         MenuOverlayDx::Present(pSwapChain, SyncInterval, Flags, pPresentParameters, pDevice, hWnd, isUWP);
 
-#ifdef LOW_LATENCY_INPUTS
         if (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG)
         {
             auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
@@ -522,25 +516,6 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // The game's DLSSG presents through here
             InputCommon::dlssg_present();
         }
-#else
-        if (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG)
-        {
-            LOG_DEBUG("Calling fakenvapi");
-
-            static UINT64 fgPresentFrame = 0;
-            auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
-
-            if (State::Instance().fgPresentIsCalled)
-            {
-                State::Instance().fgPresentIsCalled = false;
-                fgPresentFrame = _frameCounter;
-            }
-
-            auto isInterpolated = fgIsActive && (_frameCounter - fgPresentFrame) > 0;
-
-            fakenvapi::reportFGPresent(pSwapChain, fgIsActive, isInterpolated);
-        }
-#endif
 
         _frameCounter++;
         State::Instance().frameCount = _frameCounter;
@@ -554,13 +529,13 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     else
         presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
 
-#ifdef LOW_LATENCY_INPUTS
+    DeferredRelease::Process();
+
     if (fgPresentQueue != nullptr)
     {
         InputCommon::fg_output_present(fgPresentQueue, true, fgFrameMultiplier);
         fgPresentQueue->Release();
     }
-#endif
 
     if (presentResult == S_OK)
     {
@@ -832,7 +807,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
         // When Reflex can't be used to limit, sleep in present
         // DXVK's DXGI presents through Vulkan where the limiter already sleeps
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
     }
     else
@@ -1035,6 +1010,10 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
         result = _real->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
     }
 
+    // Game recreates its views before the next present, resource tracking filters them by swapchain size
+    if (result == S_OK && _real->GetDesc(&State::Instance().currentSwapchainDesc) != S_OK)
+        LOG_WARN("Can't get swapchain desc!");
+
     if (result == DXGI_ERROR_DEVICE_REMOVED && State::Instance().currentD3D12Device != nullptr)
         Util::GetDeviceRemovedReason(State::Instance().currentD3D12Device);
 
@@ -1191,7 +1170,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
         // When Reflex can't be used to limit, sleep in present
         // DXVK's DXGI presents through Vulkan where the limiter already sleeps
         if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !InputCommon::can_limit_fps())
             FrameLimit::sleep(false);
     }
     else
@@ -1456,6 +1435,10 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
         result = _real3->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask,
                                         ppPresentQueue);
     }
+
+    // Game recreates its views before the next present, resource tracking filters them by swapchain size
+    if (result == S_OK && _real->GetDesc(&State::Instance().currentSwapchainDesc) != S_OK)
+        LOG_WARN("Can't get swapchain desc!");
 
     if (result == DXGI_ERROR_DEVICE_REMOVED && State::Instance().currentD3D12Device != nullptr)
         Util::GetDeviceRemovedReason(State::Instance().currentD3D12Device);
