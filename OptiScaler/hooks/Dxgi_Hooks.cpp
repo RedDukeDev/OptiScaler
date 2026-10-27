@@ -11,6 +11,7 @@
 #include <DllNames.h>
 #include <misc/IdentifyGpu.h>
 #include <with_dx12/with_dx12.h>
+#include <nr/NeuralRendering.h>
 
 #include "Hook_Utils.h"
 
@@ -282,12 +283,19 @@ void DxgiHooks::Hook()
 
     // If not spoofing and
     // using no frame generation (or Nukem's) and
-    // not using DXGI spoofing we don't need DXGI hooks
-    // Probably I forgot something but we can add it later
+    // not using DXGI spoofing and
+    // not set up for neural rendering
+    // we don't need DXGI hooks
+    //
+    // Neural rendering is handed each frame by the wrapped swapchain's Present, and a swapchain can only be wrapped
+    // as it is created, while this runs once at startup. So the hooks stay when it is on, and also when its runtime
+    // is installed: even without the overlay a menu is drawn by the upscaler, and switching neural rendering on there
+    // would find the swapchain already made and unwrapped, with nothing to call Present.
     if (!Config::Instance()->OverlayMenu.value_or_default() &&
         (Config::Instance()->FGInput.value_or_default() == FGInput::NoFG ||
          Config::Instance()->FGInput.value_or_default() == FGInput::NvngxFG) &&
-        !Config::Instance()->DxgiSpoofing.value_or_default())
+        !Config::Instance()->DxgiSpoofing.value_or_default() &&
+        !(NeuralRendering::Enabled() || NeuralRendering::RuntimeInstalled()))
     {
         return;
     }

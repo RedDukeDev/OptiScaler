@@ -208,6 +208,12 @@ std::filesystem::path NeuralRendering::RuntimeDirectory()
     return std::filesystem::path(Config::Instance()->MainDllPath.value()) / L"dlss5nr";
 }
 
+bool NeuralRendering::RuntimeInstalled()
+{
+    std::error_code error;
+    return std::filesystem::exists(RuntimeDirectory() / L"dlss5nr_runtime.dll", error);
+}
+
 bool NeuralRendering::RuntimePresent()
 {
     auto library = RuntimeDirectory() / L"dlss5nr_runtime.dll";

@@ -96,6 +96,9 @@ class NeuralRendering
 
     // For the menu.
     static bool RuntimePresent();
+    // Whether the runtime's files are there, with no word about it in the log: for the places that
+    // decide at startup, before anyone asked for the effect.
+    static bool RuntimeInstalled();
     static void GetStatus(dlss5nr_status& status);
     static std::filesystem::path RuntimeDirectory();
 
