@@ -213,6 +213,99 @@ int PresetFor(NVSDK_NGX_Parameter* parameters, int quality)
     return requested == 0 ? DefaultPresetFor(quality) : requested;
 }
 
+// Ray reconstruction has two presets: D and E. Left alone, the library uses a default of its own that is neither (the
+// image comes out grainy), where NVIDIA's driver sets D.
+constexpr int kRrPresetD = 4;
+constexpr int kRrPresetE = 5;
+
+int ValidRr(uint32_t preset)
+{
+    if (preset == NV_PRESET_LATEST)
+        return kRrPresetE;
+
+    return preset == kRrPresetD || preset == kRrPresetE ? (int) preset : 0;
+}
+
+// The render preset of ray reconstruction at this quality: the menu's, the game's hint, D.
+int RrPresetFor(NVSDK_NGX_Parameter* parameters, int quality)
+{
+    auto& config = *Config::Instance();
+
+    if (config.DLSSDRenderPresetOverride.value_or_default())
+    {
+        const CustomOptional<uint32_t>* perQuality = nullptr;
+        const char* hint = nullptr;
+        switch (quality)
+        {
+        case NVSDK_NGX_PerfQuality_Value_MaxPerf:
+            perQuality = &config.DLSSDRenderPresetPerformance;
+            break;
+        case NVSDK_NGX_PerfQuality_Value_Balanced:
+            perQuality = &config.DLSSDRenderPresetBalanced;
+            break;
+        case NVSDK_NGX_PerfQuality_Value_MaxQuality:
+            perQuality = &config.DLSSDRenderPresetQuality;
+            break;
+        case NVSDK_NGX_PerfQuality_Value_UltraPerformance:
+            perQuality = &config.DLSSDRenderPresetUltraPerformance;
+            break;
+        case NVSDK_NGX_PerfQuality_Value_UltraQuality:
+            perQuality = &config.DLSSDRenderPresetUltraQuality;
+            break;
+        case NVSDK_NGX_PerfQuality_Value_DLAA:
+            perQuality = &config.DLSSDRenderPresetDLAA;
+            break;
+        default:
+            break;
+        }
+
+        if (config.DLSSDRenderPresetForAll.has_value())
+            if (const int preset = ValidRr(config.DLSSDRenderPresetForAll.value()); preset != 0)
+                return preset;
+
+        if (perQuality != nullptr && perQuality->has_value())
+            if (const int preset = ValidRr(perQuality->value()); preset != 0)
+                return preset;
+
+        (void) hint;
+    }
+
+    const char* name = nullptr;
+    switch (quality)
+    {
+    case NVSDK_NGX_PerfQuality_Value_MaxPerf:
+        name = "RayReconstruction.Hint.Render.Preset.Performance";
+        break;
+    case NVSDK_NGX_PerfQuality_Value_Balanced:
+        name = "RayReconstruction.Hint.Render.Preset.Balanced";
+        break;
+    case NVSDK_NGX_PerfQuality_Value_MaxQuality:
+        name = "RayReconstruction.Hint.Render.Preset.Quality";
+        break;
+    case NVSDK_NGX_PerfQuality_Value_UltraPerformance:
+        name = "RayReconstruction.Hint.Render.Preset.UltraPerformance";
+        break;
+    case NVSDK_NGX_PerfQuality_Value_UltraQuality:
+        name = "RayReconstruction.Hint.Render.Preset.UltraQuality";
+        break;
+    case NVSDK_NGX_PerfQuality_Value_DLAA:
+        name = "RayReconstruction.Hint.Render.Preset.DLAA";
+        break;
+    default:
+        break;
+    }
+
+    if (name != nullptr)
+    {
+        unsigned int asked = 0;
+        parameters->Get(name, &asked);
+        if (const int preset = ValidRr(asked); preset != 0)
+            return preset;
+    }
+
+    return kRrPresetD;
+}
+
 } // namespace
 
 DLSSZFeatureDx12::DLSSZFeatureDx12(unsigned int handleId, NVSDK_NGX_Parameter* parameters, bool rayReconstruction)
@@ -289,7 +382,7 @@ bool DLSSZFeatureDx12::InitInternal(ID3D12GraphicsCommandList* commandList, NVSD
     const int asked = (int) PerfQualityValue();
     info.quality = asked == NVSDK_NGX_PerfQuality_Value_UltraQuality ? (int) NVSDK_NGX_PerfQuality_Value_MaxQuality : asked;
     // Ray reconstruction has presets of its own, which the game names differently: left to the library.
-    info.preset = _rayReconstruction ? 0 : PresetFor(parameters, asked);
+    info.preset = _rayReconstruction ? RrPresetFor(parameters, asked) : PresetFor(parameters, asked);
 
     LOG_INFO("DLSS on AMD: creating {} for {}x{} to {}x{}, quality {}, preset {}",
              _rayReconstruction ? "ray reconstruction" : "super resolution", info.render_width, info.render_height,

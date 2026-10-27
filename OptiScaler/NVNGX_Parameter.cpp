@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <misc/IdentifyGpu.h>
 #include <framegen/nvngx/Nvngx_FG.h>
+#include <zluda/DlssZ.h>
 
 /// @brief Calculates the resolution scaling ratio override based on the provided quality level and current
 /// configuration.
@@ -795,8 +796,10 @@ void InitNGXParameters(NVSDK_NGX_Parameter* InParams, API api)
             InParams->Set("SuperSamplingDenoising.MinDriverVersionMinor", 0);
         }
 
-        InParams->Set("SuperSamplingDenoising.Available", 0);
-        InParams->Set("SuperSamplingDenoising.FeatureInitResult", 0);
+        // Ray reconstruction is there where NVIDIA's library runs over ZLUDA (D3D12): the game's option is enabled by this
+        const bool rayReconstruction = api == API::DX12 && DlssZ::Usable(true);
+        InParams->Set("SuperSamplingDenoising.Available", rayReconstruction ? 1 : 0);
+        InParams->Set("SuperSamplingDenoising.FeatureInitResult", rayReconstruction ? 1 : 0);
     }
 
     if ((api == API::DX12 || api == API::Vulkan) && (State::Instance().activeFgInput == FGInput::DLSSG ||
