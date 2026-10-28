@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <misc/IdentifyGpu.h>
+#include <State.h>
 
 typedef HRESULT (*PFN_GetDesc)(IDXGIAdapter* This, DXGI_ADAPTER_DESC* pDesc);
 typedef HRESULT (*PFN_GetDesc1)(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc);
@@ -20,6 +21,9 @@ inline static PFN_GetDesc1 o_GetDesc1 = nullptr;
 inline static PFN_GetDesc2 o_GetDesc2 = nullptr;
 inline static PFN_GetDesc3 o_GetDesc3 = nullptr;
 
+typedef HRESULT (*PFN_CheckInterfaceSupport)(IDXGIAdapter* This, REFGUID InterfaceName, LARGE_INTEGER* pUMDVersion);
+inline static PFN_CheckInterfaceSupport o_CheckInterfaceSupport = nullptr;
+
 inline static std::string toLower(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -29,6 +33,32 @@ inline static std::string toLower(std::string s)
 inline static bool iequals(const std::string& a, const std::string& b) { return toLower(a) == toLower(b); }
 
 #pragma region DXGI Adapter methods
+
+// Unreal reads the driver version of an NVIDIA adapter out of this. DXVK has no Windows driver to ask and says 0
+HRESULT DxgiSpoofing::hkCheckInterfaceSupport(IDXGIAdapter* This, REFGUID InterfaceName, LARGE_INTEGER* pUMDVersion)
+{
+    auto result = o_CheckInterfaceSupport(This, InterfaceName, pUMDVersion);
+
+    if (result == S_OK && pUMDVersion != nullptr)
+    {
+        auto caller = Util::WhoIsTheCaller(_ReturnAddress());
+
+        LOG_INFO("UMD version {}.{}.{}.{}, caller: {}", (int) ((pUMDVersion->QuadPart >> 48) & 0xFFFF),
+                 (int) ((pUMDVersion->QuadPart >> 32) & 0xFFFF), (int) ((pUMDVersion->QuadPart >> 16) & 0xFFFF),
+                 (int) (pUMDVersion->QuadPart & 0xFFFF), caller);
+
+        // 31.0.19.9999 is NVIDIA's driver 999.99, the one the NVAPI and Streamline answers already give
+        if (State::Instance().isRunningOnLinux && pUMDVersion->QuadPart == 0 &&
+            Config::Instance()->DxgiSpoofing.value_or_default() &&
+            Config::Instance()->SpoofedVendorId.value_or_default() == VendorId::Nvidia)
+        {
+            pUMDVersion->QuadPart = (31LL << 48) | (19LL << 16) | 9999LL;
+            LOG_INFO("UMD version was 0, giving 31.0.19.9999");
+        }
+    }
+
+    return result;
+}
 
 HRESULT DxgiSpoofing::hkGetDesc3(IDXGIAdapter4* This, DXGI_ADAPTER_DESC3* pDesc)
 {
@@ -265,7 +295,8 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         return;
     }
 
-    if (o_GetDesc != nullptr && o_GetDesc1 != nullptr && o_GetDesc2 != nullptr && o_GetDesc3 != nullptr)
+    if (o_GetDesc != nullptr && o_GetDesc1 != nullptr && o_GetDesc2 != nullptr && o_GetDesc3 != nullptr &&
+        o_CheckInterfaceSupport != nullptr)
         return;
 
     PVOID* pVTable = *(PVOID**) unkAdapter;
@@ -281,6 +312,13 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         LOG_DEBUG("Attach to GetDesc");
         o_GetDesc = (PFN_GetDesc) pVTable[8];
         DetourAttach(&(PVOID&) o_GetDesc, hkGetDesc);
+    }
+
+    if (o_CheckInterfaceSupport == nullptr && adapterOk)
+    {
+        LOG_DEBUG("Attach to CheckInterfaceSupport");
+        o_CheckInterfaceSupport = (PFN_CheckInterfaceSupport) pVTable[9];
+        DetourAttach(&(PVOID&) o_CheckInterfaceSupport, hkCheckInterfaceSupport);
     }
 
     if (adapter != nullptr)
@@ -327,6 +365,7 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         o_GetDesc1 = nullptr;
         o_GetDesc2 = nullptr;
         o_GetDesc3 = nullptr;
+        o_CheckInterfaceSupport = nullptr;
     }
 }
 

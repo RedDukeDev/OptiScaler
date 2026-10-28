@@ -14,4 +14,5 @@ class DxgiSpoofing
     static HRESULT hkGetDesc1(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc);
     static HRESULT hkGetDesc2(IDXGIAdapter2* This, DXGI_ADAPTER_DESC2* pDesc);
     static HRESULT hkGetDesc3(IDXGIAdapter4* This, DXGI_ADAPTER_DESC3* pDesc);
+    static HRESULT hkCheckInterfaceSupport(IDXGIAdapter* This, REFGUID InterfaceName, LARGE_INTEGER* pUMDVersion);
 };

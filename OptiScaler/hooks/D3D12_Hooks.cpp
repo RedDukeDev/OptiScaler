@@ -1846,6 +1846,19 @@ static HRESULT hkCheckFeatureSupport(ID3D12Device* device, D3D12_FEATURE Feature
 {
     auto result = o_CheckFeatureSupport(device, Feature, pFeatureSupportData, FeatureSupportDataSize);
 
+    // What the game is told about the device, to compare a Wine run with a Windows one
+    if (result == S_OK && Feature == D3D12_FEATURE_D3D12_OPTIONS5 &&
+        FeatureSupportDataSize >= sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS5))
+    {
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            LOG_INFO("ray tracing tier: {}",
+                     (int) ((D3D12_FEATURE_DATA_D3D12_OPTIONS5*) pFeatureSupportData)->RaytracingTier);
+        }
+    }
+
     if (Config::Instance()->UESpoofIntelAtomics64.value_or_default() && Feature == D3D12_FEATURE_D3D12_OPTIONS9 &&
         device == State::Instance().currentD3D12Device)
     {
