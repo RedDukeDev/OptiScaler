@@ -8,6 +8,7 @@
 #include <misc/IdentifyGpu.h>
 #include <framegen/nvngx/Nvngx_FG.h>
 #include <zluda/DlssZ.h>
+#include <nr/NeuralRendering.h>
 
 /// @brief Calculates the resolution scaling ratio override based on the provided quality level and current
 /// configuration.
@@ -372,6 +373,13 @@ template <typename T> void NVNGX_Parameters::setT(const char* key, T& value)
     m_values[key] = value;
 }
 
+// What the game asks about ray reconstruction, and what it is told: the option stays greyed in a game when
+// these answers are not the ones it wants, and nothing else says so.
+static bool IsRayReconstructionKey(const char* key)
+{
+    return strstr(key, "Denoising") != nullptr || strstr(key, "RayReconstruction") != nullptr;
+}
+
 template <typename T> NVSDK_NGX_Result NVNGX_Parameters::getT(const char* key, T* value) const
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
@@ -380,11 +388,21 @@ template <typename T> NVSDK_NGX_Result NVNGX_Parameters::getT(const char* key, T
     if (k == m_values.end())
     {
         LOG_TRACE("('{0}', FAIL)", key);
+
+        if (IsRayReconstructionKey(key))
+            LOG_INFO("ray reconstruction: the game asked for '{0}', which is not set", key);
+
         return NVSDK_NGX_Result_Fail;
     };
 
     const Parameter& p = (*k).second;
     *value = p;
+
+    if constexpr (std::is_arithmetic_v<T>)
+    {
+        if (IsRayReconstructionKey(key))
+            LOG_INFO("ray reconstruction: the game asked for '{0}' and got {1}", key, *value);
+    }
 
     return NVSDK_NGX_Result_Success;
 }
@@ -798,6 +816,9 @@ void InitNGXParameters(NVSDK_NGX_Parameter* InParams, API api)
 
         // Ray reconstruction is there where NVIDIA's library runs over ZLUDA (D3D12): the game's option is enabled by this
         const bool rayReconstruction = api == API::DX12 && DlssZ::Usable(true);
+        LOG_INFO("ray reconstruction offered: {0} (api {1}, runtime {2}, snippet {3}, ZLUDA DLSS {4})", rayReconstruction,
+                 (int) api, NeuralRendering::RuntimeInstalled(), DlssZ::Available(true),
+                 Config::Instance()->ZludaDlssEnabled.value_or(true));
         InParams->Set("SuperSamplingDenoising.Available", rayReconstruction ? 1 : 0);
         InParams->Set("SuperSamplingDenoising.FeatureInitResult", rayReconstruction ? 1 : 0);
     }
