@@ -12,6 +12,7 @@
 #include "Nvngx_FFX.h"
 #include "Nvngx_Combo.h"
 #include "Nvngx_Nvidia.h"
+#include "Nvngx_Custom.h"
 #include <imgui/ImGuiNotify.hpp>
 #include <nvsdk_ngx_vk.h>
 
@@ -44,6 +45,10 @@ IFGNvngx* Nvngx_FG::getProvider()
         _provider = std::make_unique<Nvngx_Nvidia>();
         break;
 
+    case FGNvngxReplacement::Custom:
+        _provider = std::make_unique<Nvngx_Custom>(State::Instance().activeFgNvngxCustom);
+        break;
+
     case FGNvngxReplacement::None:
     default:
         return nullptr;
@@ -73,6 +78,8 @@ IFGNvngx* Nvngx_FG::getProvider()
                 return "Combo";
             case FGNvngxReplacement::Nvidia:
                 return "NVIDIA";
+            case FGNvngxReplacement::Custom:
+                return "Custom DLSSG";
             case FGNvngxReplacement::None:
             default:
                 return "???";
