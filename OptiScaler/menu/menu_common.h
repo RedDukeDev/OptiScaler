@@ -170,6 +170,11 @@ class MenuCommon
 
     inline static void ShowTooltip(const char* tip);
 
+    // The GPU architecture NVIDIA's libraries are told they run on: a combo for one of the three NvidiaGpu settings
+    // (upscaler, frame generation, neural rendering). Says under it when a change is seen.
+    static bool RenderDeclaredGpuCombo(const char* label, CustomOptional<NvidiaGpu>& setting, const char* tooltip,
+                                       const char* whenApplied);
+
     inline static void ShowResetButton(CustomOptional<bool, NoDefault>* initFlag, std::string buttonName);
     inline static void ReInitUpscaler();
 

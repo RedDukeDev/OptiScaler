@@ -4,6 +4,11 @@
 #include <zluda/DlssZ.h>
 #include <zluda/d4r_commands/d3d12_command_hooks.h>
 
+int Nvngx_Nvidia::getMaxFakeFramesCount()
+{
+    return Config::Instance()->NvidiaGpuFrameGen.value_or_default() == NvidiaGpu::Blackwell ? 5 : 1;
+}
+
 namespace
 {
 

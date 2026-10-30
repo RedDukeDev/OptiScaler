@@ -1,4 +1,5 @@
 #include "pch.h"
+#include <set>
 #include "menu_common.h"
 #include "PresentRateMeter.h"
 #include <inputs/FG/XeFG_Inputs_Dx12.h>
@@ -1820,6 +1821,30 @@ static ImVec4 toneMapColor(const ImVec4& color)
     default:
         return color;
     }
+}
+
+bool MenuCommon::RenderDeclaredGpuCombo(const char* label, CustomOptional<NvidiaGpu>& setting, const char* tooltip,
+                                        const char* whenApplied)
+{
+    static constexpr const char* names[] = { "Ada (RTX 40)", "Blackwell (RTX 50)" };
+    // The combos changed since the game started: what each is told changes only when its library starts again
+    static std::set<std::string> changedLabels;
+
+    int index = (int) setting.value_or_default();
+    const bool changed = ImGui::Combo(label, &index, names, 2);
+    ShowTooltip(tooltip);
+
+    if (changed)
+    {
+        setting = (NvidiaGpu) index;
+        Config::Instance()->ApplyNvidiaGpuEnvironment();
+        changedLabels.insert(label);
+    }
+
+    if (changedLabels.contains(label))
+        ImGui::TextColored(StatusWarn(), "%s", whenApplied);
+
+    return changed;
 }
 
 static void MenuHdrCheck(ImGuiIO io)
@@ -3666,6 +3691,18 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
         ImGui::TextDisabled("(DRS)");
     }
 
+    // DLSS on an AMD GPU runs on the dlss5nr runtime, which tells it what GPU it is on. Not inside the DLSS settings
+    // below, which have conditions of their own and are not shown for this feature.
+    if ((currentBackend == Upscaler::DLSS || usesDlssd) && primaryGpu.vendorId != VendorId::Nvidia)
+    {
+        ImGui::PushItemWidth(150.0f * menuResScale);
+        RenderDeclaredGpuCombo("Declared GPU##upscaler", config->NvidiaGpuUpscaler,
+                               "The GPU architecture NVIDIA's DLSS is told it runs on\n"
+                               "Blackwell is what the newest features expect, Ada what the libraries were first made for",
+                               "Seen when the upscaler is created again: pick another upscaler and back");
+        ImGui::PopItemWidth();
+    }
+
     if (!usesDlssd)
     {
         if (state.newBackend != Upscaler::Reset && state.newBackend != currentBackend)
@@ -4673,6 +4710,17 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 
                 nvngxCombo("FG Nvngx Replacement");
                 ShowTooltip("What backend to use instead of the real DLSSG");
+            }
+
+            if ((replaceFgOutputWithNvngx || showNvngxFgDowndown) &&
+                config->FGNvngxReplacement.value_or_default() == FGNvngxReplacement::Nvidia)
+            {
+                ImGui::TableNextColumn();
+
+                RenderDeclaredGpuCombo("Declared GPU##framegen", config->NvidiaGpuFrameGen,
+                                       "The GPU architecture NVIDIA's frame generation is told it runs on\n"
+                                       "Blackwell offers up to 4X (three generated frames), Ada 2X and is a little faster",
+                                       "Seen when the game starts again: Save Settings and restart");
             }
 
             ImGui::EndTable();
@@ -7080,6 +7128,13 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                        "and its result is carried along the motion vectors,\n"
                        "so a slow network lowers how often the image is\n"
                        "enhanced, not the frame rate");
+
+        ImGui::PushItemWidth(150.0f * ctx.menuResScale);
+        RenderDeclaredGpuCombo("Declared GPU##neural", config->NvidiaGpuNeural,
+                               "The GPU architecture the neural rendering is told it runs on\n"
+                               "The network refuses to be created below Blackwell",
+                               "Seen when the game starts again: Save Settings and restart");
+        ImGui::PopItemWidth();
 
         if (withUpscaler)
         {

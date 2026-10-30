@@ -12,6 +12,7 @@ class Nvngx_Nvidia : public Nvngx_DllProxy
   public:
     Nvngx_Nvidia() { LoadLibraries(); }
 
-    int getMaxFakeFramesCount() override { return 1; }
+    // One generated frame on an Ada identity, five on Blackwell's (the multi frame generation, up to 6X).
+    int getMaxFakeFramesCount() override;
     FGNvngxReplacement getType() override { return FGNvngxReplacement::Nvidia; }
 };

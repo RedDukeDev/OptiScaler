@@ -76,6 +76,24 @@ template <> struct EnumConfig<FGOutput>
     };
 };
 
+// The architecture NVIDIA's libraries (DLSS, NVIDIA's frame generation, the neural rendering) are told they run on, when
+// they run on an AMD GPU through the dlss5nr runtime. Blackwell is what the multi frame generation needs.
+enum class NvidiaGpu : uint32_t
+{
+    Ada,
+    Blackwell,
+};
+
+template <> struct EnumConfig<NvidiaGpu>
+{
+    static constexpr auto default_value = NvidiaGpu::Blackwell;
+
+    static constexpr std::pair<NvidiaGpu, std::string_view> mapping[] = {
+        { NvidiaGpu::Ada, "Ada" },
+        { NvidiaGpu::Blackwell, "Blackwell" },
+    };
+};
+
 enum class FGNvngxReplacement : uint32_t
 {
     None,

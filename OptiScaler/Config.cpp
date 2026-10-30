@@ -45,6 +45,15 @@ Config::Config()
     Reload(absoluteFileName);
 }
 
+void Config::ApplyNvidiaGpuEnvironment()
+{
+    // Ada is architecture 0x190, Blackwell 0x1B0 (NV_GPU_ARCHITECTURE_ID).
+    const auto id = [](NvidiaGpu gpu) { return gpu == NvidiaGpu::Ada ? L"0x190" : L"0x1B0"; };
+    SetEnvironmentVariableW(L"DLSS5NR_ARCH_UPSCALER", id(NvidiaGpuUpscaler.value_or_default()));
+    SetEnvironmentVariableW(L"DLSS5NR_ARCH_FG", id(NvidiaGpuFrameGen.value_or_default()));
+    SetEnvironmentVariableW(L"DLSS5NR_ARCH_NEURAL", id(NvidiaGpuNeural.value_or_default()));
+}
+
 bool Config::Reload(std::filesystem::path iniPath)
 {
     auto pathWStr = iniPath.wstring();
@@ -656,6 +665,11 @@ bool Config::Reload(std::filesystem::path iniPath)
                 ZludaDlssPreset.set_from_config(std::clamp(setting.value(), 0, 15));
 
             ZludaFastExit.set_from_config(readBool("ZludaDlss", "FastExit"));
+            NvidiaGpuUpscaler.set_from_config(readString("ZludaDlss", "DeclaredGpu").transform(CodeToEnum<NvidiaGpu>));
+            NvidiaGpuFrameGen.set_from_config(readString("FrameGen", "DeclaredGpu").transform(CodeToEnum<NvidiaGpu>));
+            NvidiaGpuNeural.set_from_config(
+                readString("NeuralRendering", "DeclaredGpu").transform(CodeToEnum<NvidiaGpu>));
+            ApplyNvidiaGpuEnvironment();
         }
 
         // Output Scaling
@@ -1677,6 +1691,12 @@ bool Config::SaveIni()
                      wstring_to_string(config->ZludaDlssRrSnippetPath.value_for_config_or(L"auto")).c_str());
         ini.SetValue("ZludaDlss", "Preset", GetIntValue(config->ZludaDlssPreset.value_for_config()).c_str());
         ini.SetValue("ZludaDlss", "FastExit", GetBoolValue(config->ZludaFastExit.value_for_config()).c_str());
+        ini.SetValue("ZludaDlss", "DeclaredGpu",
+                     config->NvidiaGpuUpscaler.value_for_config().transform(EnumToCode<NvidiaGpu>).value_or("auto").c_str());
+        ini.SetValue("FrameGen", "DeclaredGpu",
+                     config->NvidiaGpuFrameGen.value_for_config().transform(EnumToCode<NvidiaGpu>).value_or("auto").c_str());
+        ini.SetValue("NeuralRendering", "DeclaredGpu",
+                     config->NvidiaGpuNeural.value_for_config().transform(EnumToCode<NvidiaGpu>).value_or("auto").c_str());
     }
 
     // Output Scaling

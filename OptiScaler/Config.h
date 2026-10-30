@@ -556,6 +556,11 @@ class Config
     CustomOptional<int32_t> ZludaDlssPreset { 0 };
     CustomOptional<bool> ZludaFastExit { true };
 
+    // The GPU architecture NVIDIA's libraries are told they run on, for each of them (see ApplyNvidiaGpuEnvironment)
+    CustomOptional<NvidiaGpu> NvidiaGpuUpscaler { NvidiaGpu::Blackwell };
+    CustomOptional<NvidiaGpu> NvidiaGpuFrameGen { NvidiaGpu::Blackwell };
+    CustomOptional<NvidiaGpu> NvidiaGpuNeural { NvidiaGpu::Blackwell };
+
     // Output Scaling
     CustomOptional<bool> OutputScalingEnabled { false };
     CustomOptional<float> OutputScalingMultiplier { 1.5f };
@@ -818,6 +823,9 @@ class Config
 
     bool LoadFromPath(const wchar_t* InPath);
     bool SaveIni();
+    // Hands the three NvidiaGpu settings to the dlss5nr NVAPI, which reads them (DLSS5NR_ARCH_*) when a library asks
+    // what GPU this is. A library asks as it starts, so a change is seen by the next one that starts.
+    void ApplyNvidiaGpuEnvironment();
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
