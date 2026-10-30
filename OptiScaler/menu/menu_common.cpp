@@ -4584,9 +4584,12 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     nvngxOptions[fgNvngxArtursIndex].set_disabled(!state.artursFgFileAvailable, "Missing dlss-enabler-headless.dll");
 
     auto constexpr fgNvngxFfxIndex = (uint32_t) FGNvngxReplacement::FFX;
-    nvngxOptions[fgNvngxFfxIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
-    nvngxOptions[fgNvngxFfxIndex].set_disabled(!FfxApiProxy::IsFGReady(false),
-                                               "Missing amd_fidelityfx_framegeneration_dx12.dll");
+    if (state.swapchainApi == API::Vulkan)
+        nvngxOptions[fgNvngxFfxIndex].set_disabled(!FfxApiProxy::IsFGReadyVk(),
+                                                   "Missing amd_fidelityfx_framegeneration_vk.dll");
+    else
+        nvngxOptions[fgNvngxFfxIndex].set_disabled(!FfxApiProxy::IsFGReady(false),
+                                                   "Missing amd_fidelityfx_framegeneration_dx12.dll");
 
     auto constexpr fgNvngxNvidiaIndex = (uint32_t) FGNvngxReplacement::Nvidia;
     nvngxOptions[fgNvngxNvidiaIndex].set_disabled(state.swapchainApi == API::Vulkan, "Unsupported API");
