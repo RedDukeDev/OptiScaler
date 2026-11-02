@@ -2222,9 +2222,20 @@ static HRESULT hkD3D12GetInterface(REFCLSID rclsid, REFIID riid, void** ppvDebug
     return result;
 }
 
+// The game's thread and OptiScaler's GPU identification thread can both get here for the same device at the same
+// time (vkd3d-proton hands both of them the one device). The original functions below are shared, and so are the
+// detours: whoever is second must find them in place instead of hooking the hooks, or, when its transaction fails,
+// clearing the pointers the first one's hooks call through.
+static std::recursive_mutex hookDeviceMutex;
+
 static void HookToDevice(ID3D12Device* InDevice)
 {
-    if (o_CreateSampler != nullptr || InDevice == nullptr)
+    if (InDevice == nullptr)
+        return;
+
+    std::unique_lock<std::recursive_mutex> hookDeviceLock(hookDeviceMutex);
+
+    if (o_CreateSampler != nullptr)
         return;
 
     LOG_DEBUG("Dx12");
@@ -2308,6 +2319,9 @@ static void HookToDevice(ID3D12Device* InDevice)
             o_GetResourceAllocationInfo = nullptr;
         }
     }
+
+    // The rest does not touch the shared pointers, and may create devices of its own
+    hookDeviceLock.unlock();
 
     HookToCommandList(InDevice);
 

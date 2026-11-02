@@ -941,6 +941,74 @@ extern "C"
 #endif // DETOURS_INTERNAL
 #endif // __cplusplus
 
+#ifdef __cplusplus
+// A Detours transaction is process-wide: while one thread has one open, DetourTransactionBegin, DetourAttach and
+// DetourTransactionCommit of any other thread fail with ERROR_INVALID_OPERATION. Hooking happens from the game's
+// threads and from OptiScaler's own (the GPU identification), and the one that lost used to give up on its hooks, and
+// some callers then forgot the original functions of the thread that won. A thread now waits (at most a second) for
+// the transaction of another thread to end before it starts its own. A nested Begin on the thread that owns the
+// transaction still fails at once, as before.
+namespace OptiDetour
+{
+inline thread_local bool ownsTransaction = false;
+
+inline LONG Begin()
+{
+    LONG result = (DetourTransactionBegin)();
+
+    if (result == ERROR_INVALID_OPERATION && !ownsTransaction)
+    {
+        const ULONGLONG giveUp = GetTickCount64() + 1000;
+
+        while (result == ERROR_INVALID_OPERATION && GetTickCount64() < giveUp)
+        {
+            Sleep(1);
+            result = (DetourTransactionBegin)();
+        }
+    }
+
+    if (result == NO_ERROR)
+        ownsTransaction = true;
+
+    return result;
+}
+
+inline LONG Commit()
+{
+    const LONG result = (DetourTransactionCommit)();
+
+    // Commit ends the transaction of its thread, whether it worked or not
+    ownsTransaction = false;
+
+    return result;
+}
+
+inline LONG CommitEx(PVOID** failedPointer)
+{
+    const LONG result = (DetourTransactionCommitEx)(failedPointer);
+
+    ownsTransaction = false;
+
+    return result;
+}
+
+inline LONG Abort()
+{
+    const LONG result = (DetourTransactionAbort)();
+
+    if (result == NO_ERROR)
+        ownsTransaction = false;
+
+    return result;
+}
+} // namespace OptiDetour
+
+#define DetourTransactionBegin() OptiDetour::Begin()
+#define DetourTransactionCommit() OptiDetour::Commit()
+#define DetourTransactionCommitEx(failedPointer) OptiDetour::CommitEx(failedPointer)
+#define DetourTransactionAbort() OptiDetour::Abort()
+#endif // __cplusplus
+
 #endif // _DETOURS_H_
 //
 ////////////////////////////////////////////////////////////////  End of File.
