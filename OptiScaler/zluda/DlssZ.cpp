@@ -220,6 +220,18 @@ bool DlssZ::InstallCommandHooks(ID3D12Device* device, bool late)
     if (std::getenv("DLSSZ_SYNC_SUBMIT") == nullptr)
         SetEnvironmentVariableA("D4R_ASYNC_INTEROP", "1");
 
+    // The upscaler's runtime asks for a default stream per thread when it is created, but ZLUDA reads that once, at its
+    // first use, and the native kernel gate reads it at its first launch. When something else (NVIDIA's frame
+    // generation) starts ZLUDA before the upscaler exists, the two can disagree and the kernels of one network end up
+    // on streams with no order between them. Asking for it here, before anything has started ZLUDA, makes every
+    // creation order behave as the one that works (the upscaler first).
+    if (std::getenv("ZLUDA_PER_THREAD_STREAM") == nullptr && !(std::getenv("DLSS5NR_PER_THREAD_STREAM") != nullptr &&
+                                                              std::getenv("DLSS5NR_PER_THREAD_STREAM")[0] == '0'))
+    {
+        SetEnvironmentVariableA("ZLUDA_PER_THREAD_STREAM", "1");
+        LOG_INFO("DLSS on AMD: a default stream per thread is requested before ZLUDA starts");
+    }
+
     _hooksInstalled = true;
     _hooksLate = late;
     _hooksInstalledAt = GetTickCount64();

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 #include <chrono>
@@ -174,18 +175,57 @@ template<class T> RetainedArray<T> retain_values(T* const* pointer, size_t count
     for (size_t i = 0; pointer && i < count; ++i) { result.owners.emplace_back(pointer[i]); result.raw.push_back(pointer[i]); }
     return result;
 }
-struct Hook { void* target; void* replacement; };
+// Where a hook came from: the table it was read from (0 command list, 1 queue, 2 device) and the slot in it, so the
+// tables of the lists the game makes can be pointed back at the hooked functions (see adopt_table).
+struct Hook { void* target; void* replacement; int kind; size_t slot; };
 std::vector<Hook> attached;
+void** attach_base = nullptr;
+int attach_kind = 0;
 void attach_method(void* target, void* replacement, void** original, const char* name) {
     for (const auto& hook : attached) if (hook.target == target)
         throw std::runtime_error(std::string("Shared D3D12 implementation needs an explicit alias adapter: ") + name);
     const auto result = MH_CreateHook(target, replacement, original);
     if (result != MH_OK) throw std::runtime_error(std::string("Cannot intercept D3D12 ") + name + ": " + MH_StatusToString(result));
-    attached.push_back({target, replacement});
+    size_t slot = 0;
+    while (slot < 512 && attach_base && attach_base[slot] != target) ++slot;
+    attached.push_back({target, replacement, attach_kind, attach_base && slot < 512 ? slot : SIZE_MAX});
     std::printf("D4R_D3D12_HOOK method=%s\n", name);
 }
 
 #include "d3d12_command_hooks.generated.h"
+
+// A list can carry a table of its own (a block in the heap) whose hot methods go straight to the driver, past the
+// runtime functions the hooks sit on: draws, dispatches and state changes on it would never reach a hook, and after a
+// split they would land on the prefix list, already closed. The entries are pointed back at the hooked functions.
+std::shared_mutex list_slots_mutex;
+std::vector<std::pair<size_t, void*>> list_slots;
+void** shared_list_table = nullptr;
+std::atomic<size_t> adopted_entries{0};
+void rebuild_list_slots() {
+    std::unique_lock<std::shared_mutex> lock(list_slots_mutex);
+    list_slots.clear();
+    for (const auto& hook : attached) if (hook.kind == 0 && hook.slot != SIZE_MAX) list_slots.emplace_back(hook.slot, hook.target);
+}
+void adopt_table(void* list) {
+    if (!installed || !list) return;
+    auto table = *reinterpret_cast<void***>(list);
+    if (!table || table == shared_list_table) return;
+    // Only a table the runtime made for this one list: another class (a bundle) has functions of its own, and a table
+    // inside a module is shared by every list of its kind.
+    if (static_cast<ID3D12GraphicsCommandList*>(list)->GetType() == D3D12_COMMAND_LIST_TYPE_BUNDLE) return;
+    MEMORY_BASIC_INFORMATION region{};
+    if (!VirtualQuery(table, &region, sizeof(region)) || region.Type != MEM_PRIVATE) return;
+    std::shared_lock<std::shared_mutex> lock(list_slots_mutex);
+    for (const auto& entry : list_slots) {
+        void** at = &table[entry.first];
+        if (*at == entry.second) continue;
+        DWORD previous = 0;
+        if (!VirtualProtect(at, sizeof(void*), PAGE_READWRITE, &previous)) continue;
+        *at = entry.second;
+        VirtualProtect(at, sizeof(void*), previous, &previous);
+        ++adopted_entries;
+    }
+}
 
 static constexpr GUID signature_description_tag = {0xbdda6148,0x46f0,0x4d82,{0xa1,0x90,0x08,0x47,0x7e,0xda,0x32,0x12}};
 using SignatureFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_COMMAND_SIGNATURE_DESC*, ID3D12RootSignature*, REFIID, void**);
@@ -196,6 +236,7 @@ CreateListFn original_create_list = nullptr;
 HRESULT STDMETHODCALLTYPE hook_create_list(ID3D12Device* device, UINT node, D3D12_COMMAND_LIST_TYPE type,
     ID3D12CommandAllocator* allocator, ID3D12PipelineState* initial, REFIID iid, void** out) {
     const auto result = original_create_list(device, node, type, allocator, initial, iid, out);
+    if (SUCCEEDED(result) && out && *out) adopt_table(*out);
     if (!internal && SUCCEEDED(result) && out && *out) try {
         ComPtr<ID3D12GraphicsCommandList> list;
         if (SUCCEEDED(static_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(list.GetAddressOf())))) {
@@ -261,9 +302,14 @@ HRESULT STDMETHODCALLTYPE hook_Close(ID3D12GraphicsCommandList* self) {
     return result;
 }
 HRESULT STDMETHODCALLTYPE hook_Reset(ID3D12GraphicsCommandList* self, ID3D12CommandAllocator* allocator, ID3D12PipelineState* initial_state) {
-    if (internal) return original_Reset(self, allocator, initial_state);
+    if (internal) {
+        const auto result = original_Reset(self, allocator, initial_state);
+        adopt_table(self);
+        return result;
+    }
     forget(self);
     const auto result = original_Reset(self, allocator, initial_state);
+    adopt_table(self);
     if (SUCCEEDED(result)) {
         auto recording = get_recording(self);
         auto pipeline = retain(initial_state);
@@ -579,6 +625,7 @@ void track_signatures(ID3D12Device* device) {
     const auto init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) throw std::runtime_error(MH_StatusToString(init));
     auto deviceTable = *reinterpret_cast<void***>(device);
+    attach_base = deviceTable; attach_kind = 2;
     attach_method(deviceTable[device_signature_slot], reinterpret_cast<void*>(hook_signature), reinterpret_cast<void**>(&original_signature), "CreateCommandSignature");
     const auto result = MH_EnableHook(attached.back().target);
     if (result != MH_OK) {
@@ -615,17 +662,20 @@ void install(ID3D12Device* device) {
         }
         if (newest.Get() != static_cast<IUnknown*>(list.Get())) throw std::runtime_error("D3D12 command-list versions need a separate interface identity adapter");
         auto table = *reinterpret_cast<void***>(list.Get());
+        attach_base = table; attach_kind = 0;
         attach_recording_methods(table, version);
         attach_method(table[2], reinterpret_cast<void*>(hook_release), reinterpret_cast<void**>(&original_release), "Release");
         D3D12_COMMAND_QUEUE_DESC desc{}; desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         ComPtr<ID3D12CommandQueue> queue; dx(device->CreateCommandQueue(&desc, IID_PPV_ARGS(queue.GetAddressOf())), "Create hook queue");
         auto queueTable = *reinterpret_cast<void***>(queue.Get());
+        attach_base = queueTable; attach_kind = 1;
         // Queue inherits IUnknown, Object, DeviceChild; UpdateTileMappings,
         // CopyTileMappings precede ExecuteCommandLists in the public SDK.
         attach_method(queueTable[10], reinterpret_cast<void*>(hook_execute), reinterpret_cast<void**>(&original_execute), "ExecuteCommandLists");
         attach_method(queueTable[queue_signal_slot], reinterpret_cast<void*>(hook_queue_signal), reinterpret_cast<void**>(&original_queue_signal), "QueueSignal");
         attach_method(queueTable[queue_wait_slot], reinterpret_cast<void*>(hook_queue_wait), reinterpret_cast<void**>(&original_queue_wait), "QueueWait");
         auto deviceTable = *reinterpret_cast<void***>(device);
+        attach_base = deviceTable; attach_kind = 2;
         attach_method(deviceTable[device_command_list_slot], reinterpret_cast<void*>(hook_create_list), reinterpret_cast<void**>(&original_create_list), "CreateCommandList");
         // Already hooked when the device was created, so every signature the application made carries its description.
         if (!signatures_attached)
@@ -636,6 +686,8 @@ void install(ID3D12Device* device) {
         }
         const auto result = MH_ApplyQueued();
         if (result != MH_OK) throw std::runtime_error(MH_StatusToString(result));
+        shared_list_table = table;
+        rebuild_list_slots();
         installed = true;
         std::printf("D4R_D3D12_COMMAND_BACKEND installed=1 interface=%u hooks=%zu frame_age=0\n", version, attached.size());
     } catch (...) {
