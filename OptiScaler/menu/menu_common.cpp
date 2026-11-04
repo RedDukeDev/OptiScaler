@@ -4193,7 +4193,10 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
     }
 
     // DLSS -----------------
-    if ((config->DLSSEnabled.value_or_default() &&
+    // DLSSEnabled is about NVIDIA's own library and is switched off at start-up on a GPU that is not NVIDIA's.
+    // DLSS on AMD is the same library behind the dlss5nr runtime: its presets are still chosen here.
+    const bool dlssOnAmd = currentBackend == Upscaler::DLSS && !usesDlssd && primaryGpu.vendorId != VendorId::Nvidia;
+    if (((config->DLSSEnabled.value_or_default() || dlssOnAmd) &&
          (currentBackend == Upscaler::DLSS || currentBackend == Upscaler::DLSS_on12) &&
          currentFeature->Version().major > 2) ||
         usesDlssd)
@@ -4297,13 +4300,17 @@ void MenuCommon::RenderActiveUpscalerSettings(RenderMenuContext& ctx)
             ScopedIndent indent {};
             ImGui::Spacing();
 
-            bool appIdOverride = config->UseGenericAppIdWithDlss.value_or_default();
-            if (ImGui::Checkbox("Use Generic App Id with DLSS", &appIdOverride))
-                config->UseGenericAppIdWithDlss = appIdOverride;
+            // The generic app id is for NVIDIA's own NGX; on AMD the runtime reads the presets directly
+            if (!dlssOnAmd)
+            {
+                bool appIdOverride = config->UseGenericAppIdWithDlss.value_or_default();
+                if (ImGui::Checkbox("Use Generic App Id with DLSS", &appIdOverride))
+                    config->UseGenericAppIdWithDlss = appIdOverride;
 
-            ShowTooltip("Use generic appid with NGX\n"
-                        "Fixes OptiScaler preset override not working with certain games\n"
-                        "Requires a game restart");
+                ShowTooltip("Use generic appid with NGX\n"
+                            "Fixes OptiScaler preset override not working with certain games\n"
+                            "Requires a game restart");
+            }
 
             ImGui::BeginDisabled(!config->RenderPresetOverride.value_or_default() || overridden);
             ImGui::Spacing();
