@@ -212,6 +212,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             FGResourceFlip.set_from_config(readBool("OptiFG", "ResourceFlip"));
             FGResourceFlipOffset.set_from_config(readBool("OptiFG", "ResourceFlipOffset"));
+            FGHudlessFlip.set_from_config(readBool("OptiFG", "HudlessFlip"));
 
             FGAlwaysCaptureFSRFGSwapchain.set_from_config(readBool("OptiFG", "AlwaysCaptureFSRFGSwapchain"));
         }
@@ -345,7 +346,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             else if (FsrNonLinearSRGB.has_value() && FsrNonLinearSRGB.value())
                 FsrNonLinearPQ.reset();
 
-            if (FsrNonLinearPQ.has_value() || FsrNonLinearSRGB.has_value())
+            if (FsrNonLinearPQ.value_or_default() || FsrNonLinearSRGB.value_or_default())
                 FsrNonLinearColorSpace.set_volatile_value(true);
         }
 
@@ -454,6 +455,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             LogSingleFile.set_from_config(readBool("Log", "SingleFile"));
             LogAsync.set_from_config(readBool("Log", "LogAsync"));
             LogAsyncThreads.set_from_config(readInt("Log", "LogAsyncThreads"));
+            CreateDumps.set_from_config(readBool("Log", "CreateDumps"));
 
             {
                 auto setting = readString("Log", "LogFileName", false);
@@ -565,7 +567,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             ContrastEnabled.set_from_config(readBool("CAS", "ContrastEnabled"));
             if (auto setting = readFloat("CAS", "Contrast"); setting.has_value())
-                Contrast.set_from_config(std::clamp(setting.value(), -2.0f, 2.0f));
+                Contrast.set_from_config(std::clamp(setting.value(), 0.0f, 2.0f));
 
             DADepthScale.set_from_config(readFloat("CAS", "DADepthScale"));
             DADepthBias.set_from_config(readFloat("CAS", "DADepthBias"));
@@ -735,8 +737,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                 AnisotropyOverride.reset();
 
             AnisotropySkipPointFilter.set_from_config(readBool("Anisotropy", "SkipPointFilter"));
-            AnisotropyModifyComp.set_from_config(readBool("Anisotropy", "AFModifyComparison"));
-            AnisotropyModifyMinMax.set_from_config(readBool("Anisotropy", "AFModifyMinMax"));
+            AnisotropyModifyComp.set_from_config(readBool("Anisotropy", "ModifyComparison"));
+            AnisotropyModifyMinMax.set_from_config(readBool("Anisotropy", "ModifyMinMax"));
         }
 
         // Mipmap
@@ -769,7 +771,8 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             SimulateWaitableObject.set_from_config(readBool("Hotfix", "SimulateWaitableObject"));
 
-            RoundInternalResolution.set_from_config(readInt("Hotfix", "RoundInternalResolution"));
+            if (auto setting = readInt("Hotfix", "RoundInternalResolution"); setting.has_value() && setting > 0)
+                RoundInternalResolution.set_from_config(setting);
 
             RestoreComputeSignature.set_from_config(readBool("Hotfix", "RestoreComputeSignature"));
             RestoreGraphicSignature.set_from_config(readBool("Hotfix", "RestoreGraphicSignature"));
@@ -789,7 +792,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
         // Dx11 with Dx12
         {
-            Dx11DelayedInit.set_from_config(readInt("Dx11withDx12", "UseDelayedInit"));
+            Dx11DelayedInit.set_from_config(readBool("Dx11withDx12", "UseDelayedInit"));
             DontUseNTShared.set_from_config(readBool("Dx11withDx12", "DontUseNTShared"));
         }
 
@@ -905,6 +908,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             OverrideVsync.set_from_config(readBool("V-Sync", "OverrideVsync"));
             ForceVsync.set_from_config(readBool("V-Sync", "ForceVsync"));
             VsyncInterval.set_from_config(readInt("V-Sync", "SyncInterval"));
+            VulkanPresentMode.set_from_config(readInt("V-Sync", "VulkanPresentMode"));
         }
 
         // Libraries
@@ -926,9 +930,18 @@ bool Config::Reload(std::filesystem::path iniPath)
             FfxVkFGPath.set_from_config(readWString("Libraries", "FfxVkFGPath"));
 
             XeSSLibrary.set_from_config(readWString("Libraries", "XeSSPath"));
-            XeSSLibrary.set_from_config(readWString("Libraries", "XeFGPath"));
-            XeSSLibrary.set_from_config(readWString("Libraries", "XeLLPath"));
+            XeFGLibrary.set_from_config(readWString("Libraries", "XeFGPath"));
+            XeLLLibrary.set_from_config(readWString("Libraries", "XeLLPath"));
             XeSSDx11Library.set_from_config(readWString("Libraries", "XeSSDx11Path"));
+        }
+
+        // Relative paths are based on Opti's folder
+        for (auto path : { &MainDllPath, &NvngxPath, &NVNGX_DLSS_Library, &DLSSFeaturePath, &NvapiDllPath, &FfxDx12Path,
+                           &FfxDx12SRPath, &FfxDx12FGPath, &FfxDx12RRPath, &FfxDx12RCPath, &FfxVkPath, &FfxVkSRPath,
+                           &FfxVkFGPath, &XeSSLibrary, &XeFGLibrary, &XeLLLibrary, &XeSSDx11Library, &PluginPath })
+        {
+            if (path->has_value() && !path->value().empty() && std::filesystem::path(path->value()).is_relative())
+                path->set_volatile_value((Util::DllPath().parent_path() / path->value()).wstring());
         }
 
         // Reading old configs for compatibility reasons
@@ -1636,6 +1649,7 @@ bool Config::SaveIni()
         ini.SetValue("OptiFG", "ResourceFlip", GetBoolValue(Instance()->FGResourceFlip.value_for_config()).c_str());
         ini.SetValue("OptiFG", "ResourceFlipOffset",
                      GetBoolValue(Instance()->FGResourceFlipOffset.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "HudlessFlip", GetBoolValue(Instance()->FGHudlessFlip.value_for_config()).c_str());
 
         ini.SetValue("OptiFG", "AlwaysCaptureFSRFGSwapchain",
                      GetBoolValue(Instance()->FGAlwaysCaptureFSRFGSwapchain.value_for_config()).c_str());
@@ -2071,6 +2085,7 @@ bool Config::SaveIni()
                      wstring_to_string(Instance()->LogFileName.value_for_config_or(L"auto")).c_str());
         ini.SetValue("Log", "LogAsync", GetBoolValue(Instance()->LogAsync.value_for_config()).c_str());
         ini.SetValue("Log", "LogAsyncThreads", GetIntValue(Instance()->LogAsyncThreads.value_for_config()).c_str());
+        ini.SetValue("Log", "CreateDumps", GetBoolValue(Instance()->CreateDumps.value_for_config()).c_str());
     }
 
     // NvApi
@@ -2180,6 +2195,8 @@ bool Config::SaveIni()
         ini.SetValue("V-Sync", "OverrideVsync", GetBoolValue(Instance()->OverrideVsync.value_for_config()).c_str());
         ini.SetValue("V-Sync", "ForceVsync", GetBoolValue(Instance()->ForceVsync.value_for_config()).c_str());
         ini.SetValue("V-Sync", "SyncInterval", GetIntValue(Instance()->VsyncInterval.value_for_config()).c_str());
+        ini.SetValue("V-Sync", "VulkanPresentMode",
+                     GetIntValue(Instance()->VulkanPresentMode.value_for_config()).c_str());
 
         if (Instance()->VsyncInterval.has_value())
         {

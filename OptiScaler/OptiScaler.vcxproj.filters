@@ -656,6 +656,9 @@
     <ClInclude Include="hooks\D3D12_Hooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="hooks\Sampler_Overrides.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="hooks\D3D11_Hooks.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -875,6 +878,9 @@
     <ClInclude Include="misc\IdentifyGpu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="misc\CrashDumps.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="shaders\hud_copy\precompile\HudCopy_Shader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -897,6 +903,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="framegen\nvngx\Nvngx_FG.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\nvngx\NvngxVkLayouts.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NVNGX_Parameter.h">
@@ -1692,6 +1701,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="misc\IdentifyGpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="misc\CrashDumps.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp">

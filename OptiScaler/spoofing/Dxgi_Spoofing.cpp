@@ -97,7 +97,7 @@ HRESULT DxgiSpoofing::hkGetDesc3(IDXGIAdapter4* This, DXGI_ADAPTER_DESC3* pDesc)
 
             auto szName = Config::Instance()->SpoofedGPUName.value_or_default();
             std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-            std::wcscpy(pDesc->Description, szName.c_str());
+            wcsncpy_s(pDesc->Description, szName.c_str(), _TRUNCATE);
 
 #ifdef _DEBUG
             LOG_DEBUG("spoofing");
@@ -148,7 +148,7 @@ HRESULT DxgiSpoofing::hkGetDesc2(IDXGIAdapter2* This, DXGI_ADAPTER_DESC2* pDesc)
 
             auto szName = Config::Instance()->SpoofedGPUName.value_or_default();
             std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-            std::wcscpy(pDesc->Description, szName.c_str());
+            wcsncpy_s(pDesc->Description, szName.c_str(), _TRUNCATE);
 
 #ifdef _DEBUG
             LOG_DEBUG("spoofing");
@@ -191,9 +191,12 @@ HRESULT DxgiSpoofing::hkGetDesc1(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc)
         auto targetDeviceIdMatches = !Config::Instance()->TargetDeviceId.has_value() ||
                                      Config::Instance()->TargetDeviceId.value() == pDesc->DeviceId;
 
-        // amdxcffx64 needs to see AMD vendor id
+        // amdxcffx64 and FFX's FSR4 / ML FG support checks need to see AMD vendor id
         auto isFfxDriver = caller.starts_with("amdxcffx64");
-        auto keepRealAmd = isFfxDriver && pDesc->VendorId == VendorId::AMD;
+        auto isFfxUpscaler = isFfxDriver || caller.starts_with("amd_fidelityfx_upscaler_dx12") ||
+                             FfxApiProxy::IsCustomUpscalerModule(Util::GetCallerModule(_ReturnAddress()));
+        auto isFfxFg = caller.starts_with("amd_fidelityfx_framegeneration_dx12");
+        auto keepRealAmd = (isFfxUpscaler || isFfxFg) && pDesc->VendorId == VendorId::AMD;
 
         if (pDesc->VendorId != VendorId::Microsoft && targetVendorIdMatches && targetDeviceIdMatches && !keepRealAmd &&
             Config::Instance()->DxgiSpoofing.value_or_default() && !SkipSpoofing())
@@ -203,15 +206,14 @@ HRESULT DxgiSpoofing::hkGetDesc1(IDXGIAdapter1* This, DXGI_ADAPTER_DESC1* pDesc)
 
             auto szName = Config::Instance()->SpoofedGPUName.value_or_default();
             std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-            std::wcscpy(pDesc->Description, szName.c_str());
+            wcsncpy_s(pDesc->Description, szName.c_str(), _TRUNCATE);
 
 #ifdef _DEBUG
             LOG_DEBUG("spoofing");
 #endif
         }
 
-        if (isFfxDriver || caller.starts_with("amd_fidelityfx_upscaler_dx12") ||
-            FfxApiProxy::IsCustomUpscalerModule(Util::GetCallerModule(_ReturnAddress())))
+        if (isFfxUpscaler)
         {
             const auto primaryGpu = IdentifyGpu::getPrimaryGpu();
 
@@ -266,7 +268,7 @@ HRESULT DxgiSpoofing::hkGetDesc(IDXGIAdapter* This, DXGI_ADAPTER_DESC* pDesc)
 
             auto szName = Config::Instance()->SpoofedGPUName.value_or_default();
             std::memset(pDesc->Description, 0, sizeof(pDesc->Description));
-            std::wcscpy(pDesc->Description, szName.c_str());
+            wcsncpy_s(pDesc->Description, szName.c_str(), _TRUNCATE);
 
 #ifdef _DEBUG
             LOG_DEBUG("spoofing");
@@ -301,6 +303,14 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         o_CheckInterfaceSupport != nullptr)
         return;
 
+    // Adapters are hooked from any thread, concurrent Detours transactions fail
+    static std::mutex attachMutex;
+    std::scoped_lock lock(attachMutex);
+
+    if (o_GetDesc != nullptr && o_GetDesc1 != nullptr && o_GetDesc2 != nullptr && o_GetDesc3 != nullptr)
+        return;
+
+    bool attached[4] = {};
     PVOID* pVTable = *(PVOID**) unkAdapter;
 
     IDXGIAdapter* adapter = nullptr;
@@ -314,6 +324,7 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         LOG_DEBUG("Attach to GetDesc");
         o_GetDesc = (PFN_GetDesc) pVTable[8];
         DetourAttach(&(PVOID&) o_GetDesc, hkGetDesc);
+        attached[0] = true;
     }
 
     if (o_CheckInterfaceSupport == nullptr && adapterOk)
@@ -332,6 +343,7 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         LOG_DEBUG("Attach to GetDesc1");
         o_GetDesc1 = (PFN_GetDesc1) pVTable[10];
         DetourAttach(&(PVOID&) o_GetDesc1, hkGetDesc1);
+        attached[1] = true;
     }
 
     if (adapter1 != nullptr)
@@ -343,6 +355,7 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         LOG_DEBUG("Attach to GetDesc2");
         o_GetDesc2 = (PFN_GetDesc2) pVTable[11];
         DetourAttach(&(PVOID&) o_GetDesc2, hkGetDesc2);
+        attached[2] = true;
     }
 
     if (adapter2 != nullptr)
@@ -354,6 +367,7 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
         LOG_DEBUG("Attach to GetDesc3");
         o_GetDesc3 = (PFN_GetDesc3) pVTable[18];
         DetourAttach(&(PVOID&) o_GetDesc3, hkGetDesc3);
+        attached[3] = true;
     }
 
     if (adapter4 != nullptr)
@@ -363,11 +377,16 @@ void DxgiSpoofing::AttachToAdapter(IUnknown* unkAdapter)
     if (detourResult != NO_ERROR)
     {
         LOG_ERROR("DetourTransactionCommit error: {:X}", detourResult);
-        o_GetDesc = nullptr;
-        o_GetDesc1 = nullptr;
-        o_GetDesc2 = nullptr;
-        o_GetDesc3 = nullptr;
-        o_CheckInterfaceSupport = nullptr;
+
+        // Hooks from earlier transactions stay live
+        if (attached[0])
+            o_GetDesc = nullptr;
+        if (attached[1])
+            o_GetDesc1 = nullptr;
+        if (attached[2])
+            o_GetDesc2 = nullptr;
+        if (attached[3])
+            o_GetDesc3 = nullptr;
     }
 }
 
