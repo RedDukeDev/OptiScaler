@@ -46,6 +46,14 @@ class NeuralRendering
     // Whether the effect is switched on in the configuration.
     static bool Enabled();
     static bool PreUpscale();
+    // How it runs. The default is linear: every frame goes through the network, in order, and the answer is
+    // composed into that very frame. The game's command list is split where the network runs, as it is for
+    // DLSS on AMD (zluda/DlssZ.h), and the frame rate is the network's. The other way, the asynchronous
+    // mode, is the network beside the game: its result is carried to a later frame.
+    static bool Linear();
+    // Whether the game's command lists are to be tracked, so that they can be split: the linear mode is on,
+    // and its runtime is there.
+    static bool WantsCommandHooks();
 
     // Before the upscaler: returns the colour the upscaler should read instead
     // of the game's, or nullptr to leave the game's in place.
@@ -129,6 +137,14 @@ class NeuralRendering
                             bool beforeUpscale);
     static bool ComposeFinished(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source,
                                 ID3D12Resource* dest, const dlss5nr_frame* prefilled = nullptr);
+    // The same, in the linear mode: the copies of the image go to the queue in lists of their own, and the
+    // runtime puts the network's round between them.
+    static bool ComposeFinishedLinear(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source,
+                                      ID3D12Resource* dest, const dlss5nr_frame* prefilled, bool resized);
+    // In the linear mode, at the point of a game's command list where the network runs: splits the list there
+    // and has the runtime process the frame on the queue between the two halves. False when the list cannot
+    // be split (the hooks are not settled yet, or the list began before they were): nothing was done.
+    static bool ProcessSplit(ID3D12GraphicsCommandList* cmd, const dlss5nr_frame& frame);
     static bool FillFrame(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* parameters, IFeature* feature,
                           dlss5nr_frame& frame, bool beforeUpscale, const Dx11Inputs* dx11 = nullptr);
 };

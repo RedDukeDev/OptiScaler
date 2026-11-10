@@ -7200,48 +7200,33 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
                            "uncover shows far less; somewhat lower quality");
         }
 
-        // With no upscaler the network runs on the finished image. There are no
-        // motion vectors then: its result trails behind whatever moves unless
-        // Wait for the network is on, and the game's own interface is enhanced
-        // along with the scene.
-        if (!withUpscaler)
+        // With no upscaler the network runs on the finished image, without motion vectors: the
+        // game's own interface is enhanced along with the scene. In the asynchronous mode its
+        // result then trails behind whatever moves.
+        if (!withUpscaler && config->NrAsynchronous.value_or_default())
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
             ImGui::TextWrapped("No upscaler in use: the network runs on the finished image, without motion "
-                               "vectors, so its result trails behind what moves unless it is waited for");
+                               "vectors, so its result trails behind what moves");
             ImGui::PopStyleColor();
         }
 
-        if (bool wait = config->NrWaitForNetwork.value_or_default();
-            ImGui::Checkbox("Wait for the network", &wait))
+        if (bool asynchronous = config->NrAsynchronous.value_or_default();
+            ImGui::Checkbox("Asynchronous Mode##nr", &asynchronous))
         {
-            config->NrWaitForNetwork = wait;
+            config->NrAsynchronous = asynchronous;
             changed = true;
         }
 
-        ShowTooltip("The game waits for the network on every frame and its\n"
-                       "answer is applied to that very frame: no trails\n"
-                       "behind moving objects, but the frame rate becomes\n"
-                       "the network's. Best with a low network resolution,\n"
-                       "or before the upscaler. Starts once the network\n"
-                       "has answered for the first time");
-
-        ImGui::BeginDisabled(!config->NrWaitForNetwork.value_or_default());
-
-        if (bool inside = config->NrWaitInside.value_or_default(); ImGui::Checkbox("Apply on the same frame##nr", &inside))
-        {
-            config->NrWaitInside = inside;
-            changed = true;
-        }
-
-        ShowTooltip("Experimental. Instead of applying the answer to the next\n"
-                       "frame, the GPU waits for it inside the frame, so\n"
-                       "nothing follows motion vectors and nothing trails.\n"
-                       "The network keeps its history, which steadies the\n"
-                       "detail. But it makes every frame take longer\n"
-                       "(measured: about twice as long as without it)");
-
-        ImGui::EndDisabled();
+        ShowTooltip("Off (the default): every frame goes through the network, in\n"
+                       "order, and its answer is applied to that very frame. Nothing\n"
+                       "trails behind moving objects, but the frame rate becomes the\n"
+                       "network's: best with a low network resolution, or before the\n"
+                       "upscaler.\n"
+                       "On: the network runs beside the game, on its own, and its\n"
+                       "result is carried along the motion vectors to the frame the\n"
+                       "game shows. The frame rate stays the game's, and the image is\n"
+                       "enhanced as often as the network manages");
 
         dlss5nr_status status {};
         NeuralRendering::GetStatus(status);
@@ -7372,6 +7357,10 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
             ShowTooltip("The most a pixel may be brightened or darkened by the\n"
                            "network: keeps a stale or odd result from flickering");
 
+            // What follows is about a result that arrives later than the frame it was made from: the
+            // synchronous mode has none.
+            ImGui::BeginDisabled(!config->NrAsynchronous.value_or_default());
+
             if (int frames = config->NrBlendFrames.value_or_default();
                 ImGui::SliderInt("Blend frames##nr", &frames, 0, 8))
             {
@@ -7429,6 +7418,8 @@ void MenuCommon::RenderNeuralRenderingSettings(RenderMenuContext& ctx, bool with
 
             ShowTooltip("Frames a result is carried along the motion vectors\n"
                            "before it starts to fade");
+
+            ImGui::EndDisabled();
 
             const char* encodings[] = { "Auto", "Linear (HDR)", "Display encoded" };
             if (int encoding = config->NrEncoding.value_or_default();

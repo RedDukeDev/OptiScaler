@@ -9,6 +9,7 @@
 #include <with_dx12/dx11_with_dx12.h>
 #include <misc/IdentifyGpu.h>
 #include <zluda/DlssZ.h>
+#include <zluda/d4r_commands/d3d12_command_hooks.h>
 
 #include <vector>
 
@@ -22,6 +23,7 @@ struct RuntimeApi
     decltype(&dlss5nr_default_settings) defaultSettings = nullptr;
     decltype(&dlss5nr_set_settings) setSettings = nullptr;
     decltype(&dlss5nr_process) process = nullptr;
+    decltype(&dlss5nr_process_queue) processQueue = nullptr;
     decltype(&dlss5nr_present) present = nullptr;
     decltype(&dlss5nr_get_status) getStatus = nullptr;
     decltype(&dlss5nr_loader_thread) loaderThread = nullptr;
@@ -51,7 +53,7 @@ std::vector<Retired> _retired;
 // few allocators in turn (each reused only once the GPU is done with it), a
 // copy of the back buffer to read and a buffer to compose into.
 constexpr int kPresentsWithoutUpscaler = 8;
-constexpr UINT kAloneAllocators = 4;
+constexpr UINT kAloneAllocators = 6;
 int _presentsSinceUpscaler = kPresentsWithoutUpscaler;
 // Set when the command list for the finished-image path could not be made.
 bool _aloneFailed = false;
@@ -186,6 +188,10 @@ void Barrier(ID3D12GraphicsCommandList* cmd, ID3D12Resource* resource, D3D12_RES
 
 bool NeuralRendering::Enabled() { return Config::Instance()->NrEnabled.value_or_default(); }
 
+bool NeuralRendering::Linear() { return !Config::Instance()->NrAsynchronous.value_or_default(); }
+
+bool NeuralRendering::WantsCommandHooks() { return Enabled() && Linear() && RuntimeInstalled(); }
+
 bool NeuralRendering::PreUpscale()
 {
     auto config = Config::Instance();
@@ -258,12 +264,10 @@ void NeuralRendering::PushSettings()
     settings.follow_motion = config->NrFollowMotion.value_or_default() ? 1 : 0;
     settings.network_history = config->NrNetworkHistory.value_or_default() ? 1 : 0;
     settings.show_tracking = config->NrShowTracking.value_or_default() ? 1 : 0;
-    settings.wait_for_network = config->NrWaitForNetwork.value_or_default() ? 1 : 0;
     settings.passes = config->NrPasses.value_or_default();
     settings.network_preset = config->NrPreset.value_or_default();
     settings.keep_local_tone = config->NrKeepLocalTone.value_or_default() ? 1 : 0;
     settings.blend_frames = config->NrBlendFrames.value_or_default();
-    settings.wait_inside = config->NrWaitInside.value_or_default() ? 1 : 0;
     settings.max_age = config->NrMaxAge.value_or_default();
     settings.encoding = config->NrEncoding.value_or_default();
     settings.exposure_mode = config->NrExposureMode.value_or_default();
@@ -320,6 +324,7 @@ bool NeuralRendering::EnsureRuntime(ID3D12Device* device)
     BIND(defaultSettings, "dlss5nr_default_settings");
     BIND(setSettings, "dlss5nr_set_settings");
     BIND(process, "dlss5nr_process");
+    BIND(processQueue, "dlss5nr_process_queue");
     BIND(present, "dlss5nr_present");
     BIND(getStatus, "dlss5nr_get_status");
     BIND(loaderThread, "dlss5nr_loader_thread");
@@ -411,6 +416,49 @@ bool NeuralRendering::FillFrame(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parame
     return frame.depth != nullptr && frame.motion != nullptr;
 }
 
+bool NeuralRendering::ProcessSplit(ID3D12GraphicsCommandList* cmd, const dlss5nr_frame& frame)
+{
+    // The hooks that track the game's command lists are put on the device as it is created when the runtime is there
+    // to be used; if the effect was switched on later, they come late, and the lists that began before them cannot be
+    // split: a few seconds are left out (DlssZ::HooksAreSettled).
+    if (!DlssZ::HooksAreSettled())
+    {
+        static bool logged = false;
+        if (!logged && DlssZ::CommandHooksInstalled())
+        {
+            LOG_WARN("Neural rendering: waiting for the command list hooks to settle");
+            logged = true;
+        }
+
+        return false;
+    }
+
+    auto copy = std::make_shared<dlss5nr_frame>(frame);
+    copy->command_list = nullptr;
+
+    try
+    {
+        d4r::win::commands::record_boundary(cmd,
+                                            [copy](ID3D12CommandQueue* queue)
+                                            {
+                                                if (_context == nullptr)
+                                                    return;
+
+                                                LOG_DEBUG("Neural rendering: the frame is on the queue, thread {}", GetCurrentThreadId());
+                                                if (_api.processQueue(_context, queue, copy.get()) != 0)
+                                                    LOG_ERROR("Neural rendering: the frame could not be processed");
+                                                LOG_DEBUG("Neural rendering: the frame was processed");
+                                            });
+    }
+    catch (const std::exception& failure)
+    {
+        LOG_ERROR("Neural rendering: the command list could not be split: {}", failure.what());
+        return false;
+    }
+
+    return true;
+}
+
 ID3D12Resource* NeuralRendering::BeforeUpscale(ID3D12Device* device, ID3D12GraphicsCommandList* cmd,
                                                NVSDK_NGX_Parameter* parameters, IFeature* feature)
 {
@@ -438,8 +486,17 @@ ID3D12Resource* NeuralRendering::BeforeUpscale(ID3D12Device* device, ID3D12Graph
     frame.output = _preBuffer;
     frame.output_state = colorState;
 
-    if (_api.process(_context, &frame) != 0)
+    if (Linear())
+    {
+        // Late hooks: the first frames are the game's own colour.
+        DlssZ::InstallCommandHooks(device, true);
+        if (!ProcessSplit(cmd, frame))
+            return nullptr;
+    }
+    else if (_api.process(_context, &frame) != 0)
+    {
         return nullptr;
+    }
 
     _presentsSinceUpscaler = 0;
     return _preBuffer;
@@ -461,7 +518,18 @@ bool NeuralRendering::AfterUpscale(ID3D12Device* device, ID3D12GraphicsCommandLi
             frame.output = output;
             frame.output_state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
-            if (_api.process(_context, &frame) == 0)
+            bool processed = false;
+            if (Linear())
+            {
+                DlssZ::InstallCommandHooks(device, true);
+                processed = ProcessSplit(cmd, frame);
+            }
+            else
+            {
+                processed = _api.process(_context, &frame) == 0;
+            }
+
+            if (processed)
             {
                 _presentsSinceUpscaler = 0;
                 return true;
@@ -814,6 +882,9 @@ bool NeuralRendering::ComposeFinished(ID3D12Device* device, ID3D12CommandQueue* 
 
     PushSettings();
 
+    if (Linear())
+        return ComposeFinishedLinear(device, queue, source, dest, prefilled, resized);
+
     auto cmd = _aloneList;
     _aloneAllocator[slot]->Reset();
     cmd->Reset(_aloneAllocator[slot], nullptr);
@@ -877,6 +948,86 @@ bool NeuralRendering::ComposeFinished(ID3D12Device* device, ID3D12CommandQueue* 
     _aloneAllocatorFence[slot] = _aloneFenceValue;
 
     return composed;
+}
+
+bool NeuralRendering::ComposeFinishedLinear(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source,
+                                            ID3D12Resource* dest, const dlss5nr_frame* prefilled, bool resized)
+{
+    const auto shown = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    const auto written = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    auto cmd = _aloneList;
+
+    // An allocator is reused only once the GPU is done with the list that last used it.
+    auto acquire = [&]()
+    {
+        const UINT slot = _aloneNext++ % kAloneAllocators;
+        if (_aloneFence->GetCompletedValue() < _aloneAllocatorFence[slot])
+        {
+            _aloneFence->SetEventOnCompletion(_aloneAllocatorFence[slot], _aloneEvent);
+            WaitForSingleObject(_aloneEvent, 1000);
+        }
+
+        _aloneAllocator[slot]->Reset();
+        cmd->Reset(_aloneAllocator[slot], nullptr);
+        return slot;
+    };
+    auto submit = [&](UINT slot)
+    {
+        cmd->Close();
+        ID3D12CommandList* lists[] = { cmd };
+        queue->ExecuteCommandLists(1, lists);
+        queue->Signal(_aloneFence, ++_aloneFenceValue);
+        _aloneAllocatorFence[slot] = _aloneFenceValue;
+    };
+
+    // A back buffer is neither readable by a shader nor writable as an unordered access view in general: it is
+    // copied out, and the result copied back.
+    {
+        const UINT slot = acquire();
+        Barrier(cmd, source, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Barrier(cmd, _aloneInput, shown, D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->CopyResource(_aloneInput, source);
+        Barrier(cmd, _aloneInput, D3D12_RESOURCE_STATE_COPY_DEST, shown);
+        Barrier(cmd, source, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+        submit(slot);
+    }
+
+    // The network's round, on the queue, between the two.
+    auto description = source->GetDesc();
+    dlss5nr_frame frame {};
+    if (prefilled != nullptr)
+        frame = *prefilled;
+    frame.struct_size = sizeof(frame);
+    frame.command_list = nullptr;
+    frame.input = _aloneInput;
+    frame.input_state = shown;
+    frame.output = _aloneOutput;
+    frame.output_state = written;
+    if (prefilled == nullptr)
+    {
+        frame.width = (uint32_t) description.Width;
+        frame.height = description.Height;
+        frame.pre_exposure = 1.0f;
+        // A floating point back buffer is scRGB: linear light, and beyond 1.
+        frame.hdr = description.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1 : 0;
+        frame.reset = resized ? 1 : 0;
+    }
+
+    const bool composed = _api.processQueue(_context, queue, &frame) == 0;
+    if (!composed)
+        return false;
+
+    {
+        const UINT slot = acquire();
+        Barrier(cmd, _aloneOutput, written, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Barrier(cmd, dest, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->CopyResource(dest, _aloneOutput);
+        Barrier(cmd, dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
+        Barrier(cmd, _aloneOutput, D3D12_RESOURCE_STATE_COPY_SOURCE, written);
+        submit(slot);
+    }
+
+    return true;
 }
 
 void NeuralRendering::Present(ID3D12CommandQueue* queue)

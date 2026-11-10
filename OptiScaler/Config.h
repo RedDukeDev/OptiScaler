@@ -551,12 +551,11 @@ class Config
     CustomOptional<float> NrMaxRatio { 2.0f };
     CustomOptional<bool> NrFollowMotion { true };
     CustomOptional<bool> NrNetworkHistory { false };
-    CustomOptional<bool> NrWaitForNetwork { false };
+    CustomOptional<bool> NrAsynchronous { false };
     CustomOptional<int32_t> NrPasses { 1 };
     CustomOptional<int32_t> NrPreset { 0 };
     CustomOptional<bool> NrKeepLocalTone { true };
     CustomOptional<int32_t> NrBlendFrames { 4 };
-    CustomOptional<bool> NrWaitInside { false };
     CustomOptional<bool> NrShowTracking { false };
     CustomOptional<int32_t> NrMaxAge { 8 };
     CustomOptional<int32_t> NrEncoding { 0 };

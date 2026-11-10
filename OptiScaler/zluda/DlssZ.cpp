@@ -151,6 +151,10 @@ bool DlssZ::WantsEarlyHooks()
 
     auto& config = *Config::Instance();
 
+    // The neural rendering in its linear mode splits the game's lists where the network runs.
+    if (NeuralRendering::WantsCommandHooks())
+        return true;
+
     // NVIDIA's frame generation chosen as the NVNGX replacement: it splits the game's lists as the upscaler does.
     if (config.FGNvngxReplacement.value_or_default() == FGNvngxReplacement::Nvidia && NvidiaFrameGenerationUsable())
         return true;
@@ -164,7 +168,8 @@ bool DlssZ::WantsEarlyHooks()
 
 void DlssZ::TrackCommandSignatures(ID3D12Device* device)
 {
-    if (device == nullptr || IdentifyGpu::getPrimaryGpu().dlssCapable || (!Usable(false) && !NvidiaFrameGenerationUsable()))
+    if (device == nullptr || IdentifyGpu::getPrimaryGpu().dlssCapable ||
+        (!Usable(false) && !NvidiaFrameGenerationUsable() && !NeuralRendering::WantsCommandHooks()))
         return;
 
     try

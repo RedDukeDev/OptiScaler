@@ -634,8 +634,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             NrFollowMotion.set_from_config(readBool("NeuralRendering", "FollowMotion"));
             NrNetworkHistory.set_from_config(readBool("NeuralRendering", "NetworkHistory"));
-            NrWaitForNetwork.set_from_config(readBool("NeuralRendering", "WaitForNetwork"));
-            NrWaitInside.set_from_config(readBool("NeuralRendering", "WaitInsideFrame"));
+            NrAsynchronous.set_from_config(readBool("NeuralRendering", "AsynchronousMode"));
             NrKeepLocalTone.set_from_config(readBool("NeuralRendering", "KeepLocalTone"));
 
             if (auto setting = readInt("NeuralRendering", "BlendFrames"); setting.has_value())
@@ -1691,9 +1690,8 @@ bool Config::SaveIni()
         ini.SetValue("NeuralRendering", "FollowMotion", GetBoolValue(config->NrFollowMotion.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "NetworkHistory",
                      GetBoolValue(config->NrNetworkHistory.value_for_config()).c_str());
-        ini.SetValue("NeuralRendering", "WaitForNetwork",
-                     GetBoolValue(config->NrWaitForNetwork.value_for_config()).c_str());
-        ini.SetValue("NeuralRendering", "WaitInsideFrame", GetBoolValue(config->NrWaitInside.value_for_config()).c_str());
+        ini.SetValue("NeuralRendering", "AsynchronousMode",
+                     GetBoolValue(config->NrAsynchronous.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "Passes", GetIntValue(config->NrPasses.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "Preset", GetIntValue(config->NrPreset.value_for_config()).c_str());
         ini.SetValue("NeuralRendering", "KeepLocalTone",
